@@ -1,0 +1,310 @@
+// Sprint 3 initial schema — scoped per docs/DECISIONS.md's "Sprint 3 initial
+// Prisma schema" entry: the entities needed to seed today's mock data plus
+// Sprint 4's planned services/orders.ts -> tRPC migration, and the complete
+// identity schema (no auth logic attached — that's Sprint 5).
+//
+// Deferred (added in the sprint that implements each): InventoryItem/
+// InventoryMovement, TaxCategory, CustomerPreference, Payment/Refund,
+// FiscalReceipt, Campaign/Promotion/CouponRedemption, Employee/Shift,
+// NotificationLog, AuditLog, AIInsight — all per the approved schema-scope
+// decision. Relation fields that would point at a deferred model (e.g.
+// User.employee, Branch.employees/inventoryItems, Product.taxCategory/
+// inventoryItems, Order.payments/fiscalReceipt/couponRedemptions/
+// itbisTotal) are added alongside that model, not stubbed in now.
+//
+// Modeled as closely as possible to docs/BACKEND_ARCHITECTURE.md's
+// "Proposed Prisma Schema" sketch (explicitly a structural sketch, not a
+// final implementation). Deliberate departures from that sketch, and why:
+//   - Product/Category keep `emoji`/`gradient` (Product also keeps
+//     `popular`) instead of the sketch's `imageUrl` — today's mock data
+//     (data/catalog.ts) is emoji/gradient-based, not photography, per the
+//     "Emoji + CSS gradients instead of product photography" decision.
+//     `imageUrl` lands when that decision is revisited, not before.
+//   - Delivery adds `dispatchedAt`/`deliveredAt` — the sketch omits these
+//     only alongside live GPS/location fields it explicitly defers; basic
+//     dispatch/delivery timestamps carry no such dependency.
+// Everything else (Role enum values, relation cardinality, the "current
+// status derives from OrderStatusEvent, not a redundant field on Order"
+// design, required vs. optional fields) matches the sketch as written.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & Access (Auth.js / NextAuth Prisma adapter shape — schema only,
+// Sprint 5 implements the actual authentication logic, adapters, and login
+// flows)
+// ---------------------------------------------------------------------------
+
+enum Role {
+  CUSTOMER
+  DRIVER
+  BRANCH_STAFF
+  BRANCH_MANAGER
+  OPS_MANAGER
+  FINANCE
+  MARKETING
+  HR
+  EXECUTIVE
+  ADMIN
+}
+
+model User {
+  id         String   @id @default(cuid())
+  email      String   @unique
+  phone      String? // DR: WhatsApp-first notifications key off this field
+  name       String?
+  role       Role
+  mfaEnabled Boolean  @default(false) // required true for FINANCE/OPS_MANAGER/ADMIN — enforced in Sprint 5, not here
+  createdAt  DateTime @default(now())
+
+  customer Customer?
+  driver   Driver?
+  // employee relation added once Employee lands (Sprint 9+)
+
+  accounts Account[]
+  sessions Session[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Organization
+// ---------------------------------------------------------------------------
+
+model Branch {
+  // Today's mock data (data/admin.ts) only carries a free-string branch
+  // name ("Sucursal Centro", etc.) — province/municipality/address are
+  // required here per the approved DR schema but have no mock-data
+  // equivalent; PR 3's seed script fills them with documented placeholder
+  // values.
+  id           String @id @default(cuid())
+  name         String
+  province     String
+  municipality String
+  address      String
+
+  orders Order[]
+  // inventoryItems, employees relations added once those models land
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+// ---------------------------------------------------------------------------
+
+model Category {
+  // Natural key preserved from data/catalog.ts's CategoryId slugs (e.g.
+  // "frutas-verduras") for byte-identical seeding, matching the sketch's
+  // own choice of a manual (non-cuid) id for this model.
+  id       String    @id
+  name     String
+  gradient String
+  products Product[]
+}
+
+model Brand {
+  id       String    @id @default(cuid())
+  name     String    @unique
+  products Product[]
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  brandId       String?
+  categoryId    String
+  price         Decimal  @db.Decimal(10, 2)
+  unit          String
+  description   String
+  substitutable Boolean
+  discountPct   Decimal? @db.Decimal(5, 2)
+  emoji         String
+  gradient      String
+  popular       Boolean  @default(false)
+
+  brand      Brand?      @relation(fields: [brandId], references: [id])
+  category   Category    @relation(fields: [categoryId], references: [id])
+  orderItems OrderItem[]
+  // taxCategory relation added once TaxCategory lands (Sprint 6)
+  // inventoryItems relation added once InventoryItem lands
+
+  @@index([categoryId])
+}
+
+// ---------------------------------------------------------------------------
+// Customers
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  user      User      @relation(fields: [userId], references: [id])
+  addresses Address[]
+  orders    Order[]
+  // preference relation added once CustomerPreference lands (out of Sprint 3 scope)
+}
+
+model Address {
+  id             String   @id @default(cuid())
+  customerId     String
+  street         String
+  sector         String
+  municipality   String
+  province       String
+  referencePoint String?
+  postalCode     String?
+  lat            Decimal? @db.Decimal(9, 6)
+  lng            Decimal? @db.Decimal(9, 6)
+  isDefault      Boolean  @default(false)
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Orders & Delivery
+// ---------------------------------------------------------------------------
+
+enum OrderStatus {
+  CONFIRMADO
+  PREPARANDO
+  CONTROL_CALIDAD
+  EN_CAMINO
+  ENTREGADO
+}
+
+model DeliverySlot {
+  id         String  @id @default(cuid())
+  dayLabel   String
+  dateLabel  String
+  timeRange  String
+  capacity   String // "alta" | "media" | "baja" | "completa"
+  spotsLeft  Int
+  totalSpots Int
+  express    Boolean @default(false)
+
+  orders Order[]
+}
+
+model Order {
+  id             String   @id @default(cuid())
+  customerId     String
+  branchId       String
+  deliverySlotId String
+  // Snapshotted at order time, per ENGINEERING_STANDARDS.md §6 — never a
+  // live reference to Address, which can change after the order is placed.
+  address        String
+  subtotal       Decimal  @db.Decimal(10, 2)
+  deliveryFee    Decimal  @db.Decimal(10, 2)
+  total          Decimal  @db.Decimal(10, 2)
+  createdAt      DateTime @default(now())
+
+  customer     Customer           @relation(fields: [customerId], references: [id])
+  branch       Branch             @relation(fields: [branchId], references: [id])
+  deliverySlot DeliverySlot       @relation(fields: [deliverySlotId], references: [id])
+  items        OrderItem[]
+  statusEvents OrderStatusEvent[]
+  delivery     Delivery?
+  // payments, fiscalReceipt, couponRedemptions, itbisTotal added once
+  // Payment/FiscalReceipt/CouponRedemption/TaxCategory land (Sprint 6)
+
+  @@index([customerId])
+  @@index([branchId])
+}
+
+model OrderItem {
+  id              String  @id @default(cuid())
+  orderId         String
+  productId       String
+  // Decimal, not Int — mock data includes fractional kg quantities
+  // (e.g. 1.5 kg of asado in data/orders.ts's demoOrderItems).
+  quantity        Decimal @db.Decimal(10, 3)
+  neverSubstitute Boolean @default(false)
+
+  order   Order   @relation(fields: [orderId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+}
+
+model OrderStatusEvent {
+  // Current status = the latest event per order, not a redundant field on
+  // Order (matches the sketch's explicit design intent). Sprint 4 replaces
+  // hooks/use-order-progress.ts's wall-clock simulation with real polling
+  // against this history table.
+  id        String      @id @default(cuid())
+  orderId   String
+  status    OrderStatus
+  createdAt DateTime    @default(now())
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, createdAt])
+}
+
+model Driver {
+  id      String  @id @default(cuid())
+  userId  String  @unique
+  vehicle String // DR: predominantly motorcycle for last-mile
+  plate   String
+  rating  Decimal @db.Decimal(2, 1)
+
+  user       User       @relation(fields: [userId], references: [id])
+  deliveries Delivery[]
+}
+
+model Delivery {
+  id           String    @id @default(cuid())
+  orderId      String    @unique
+  driverId     String
+  // Live GPS/location fields deliberately deferred, matching the sketch —
+  // basic dispatch/delivery timestamps carry no such dependency.
+  dispatchedAt DateTime?
+  deliveredAt  DateTime?
+
+  order  Order  @relation(fields: [orderId], references: [id])
+  driver Driver @relation(fields: [driverId], references: [id])
+}

@@ -48,22 +48,29 @@ jobs:
       - name: Run tests (if present)
         run: npm run test --if-present
 
-      # Phase 1 (PR 2) introduces prisma/schema.prisma. Until then this step
-      # is a wired-but-inert placeholder so the pipeline shape doesn't need
-      # rework when the schema lands — it activates automatically the
-      # moment the file exists.
+      # Two independent gates keep this green until Neon is actually
+      # provisioned: the schema must exist (PR 2+) AND DIRECT_URL must be a
+      # real secret (set once Neon is provisioned). Either being absent is
+      # an expected, informational skip — not a failure — so production-v1
+      # never sits in a state where CI is expected to fail because external
+      # infrastructure hasn't been set up yet. Once both are present, this
+      # step runs for real.
       - name: Prisma migrate diff against preview branch (Phase 1+)
         run: |
-          if [ -f prisma/schema.prisma ]; then
-            echo "prisma/schema.prisma detected — running migrate diff against the preview branch."
-            npx prisma migrate diff \
-              --from-migrations ./prisma/migrations \
-              --to-schema-datamodel ./prisma/schema.prisma \
-              --shadow-database-url "$DIRECT_URL" \
-              --exit-code
-          else
-            echo "No prisma/schema.prisma yet (lands in PR 2) — skipping. This step is a placeholder, not a failure."
+          if [ ! -f prisma/schema.prisma ]; then
+            echo "No prisma/schema.prisma yet — skipping. This step is a placeholder, not a failure."
+            exit 0
           fi
+          if [ -z "$DIRECT_URL" ]; then
+            echo "prisma/schema.prisma exists, but DIRECT_URL isn't configured yet (Neon not provisioned) — skipping migrate diff until the database is set up. This is expected, not a failure."
+            exit 0
+          fi
+          echo "prisma/schema.prisma detected and DIRECT_URL is configured — running migrate diff against the preview branch."
+          npx prisma migrate diff \
+            --from-migrations ./prisma/migrations \
+            --to-schema-datamodel ./prisma/schema.prisma \
+            --shadow-database-url "$DIRECT_URL" \
+            --exit-code
         env:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
 
@@ -85,15 +92,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Same placeholder pattern as above: inert until PR 2 introduces a
-      # schema and the migration role's credentials exist as a secret.
+      # Same double-gate pattern as the migrate-diff step above: schema
+      # file presence AND a real DATABASE_URL secret (the scoped migration
+      # role's credential) must both hold before this runs for real.
+      # Either being absent is an expected, informational skip.
       - name: Prisma migrate deploy (Phase 1+)
         run: |
-          if [ -f prisma/schema.prisma ]; then
-            echo "prisma/schema.prisma detected — deploying migrations under the scoped migration role."
-            npx prisma migrate deploy
-          else
-            echo "No prisma/schema.prisma yet (lands in PR 2) — skipping. This step is a placeholder, not a failure."
+          if [ ! -f prisma/schema.prisma ]; then
+            echo "No prisma/schema.prisma yet — skipping. This step is a placeholder, not a failure."
+            exit 0
           fi
+          if [ -z "$DATABASE_URL" ]; then
+            echo "prisma/schema.prisma exists, but the migration role's DATABASE_URL isn't configured yet (Neon not provisioned) — skipping migrate deploy until the database is set up. This is expected, not a failure."
+            exit 0
+          fi
+          echo "prisma/schema.prisma detected and DATABASE_URL is configured — deploying migrations under the scoped migration role."
+          npx prisma migrate deploy
         env:
           DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
