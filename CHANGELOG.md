@@ -12,6 +12,39 @@ changes (documentation, internal reorganization) as well as fixes.
 
 Nothing pending beyond what's tracked in `docs/ROADMAP.md`.
 
+## [0.1.2] - 2026-07-31
+
+Architecture freeze — concludes the Architecture & Engineering phase.
+No application code changed in this release, consistent with this
+project's policy that documentation-only work is a patch bump.
+
+### Added
+- `docs/BACKEND_ARCHITECTURE.md` — full backend design (tRPC,
+  PostgreSQL/Neon, Prisma, Auth.js, Inngest, Upstash, Azul/CardNet,
+  Twilio WhatsApp), re-scoped to the Dominican Republic as the target
+  market, with a formal decision-analysis framework, ER diagram, and
+  Prisma schema sketch. Design only — nothing implemented.
+- `docs/SECURITY_ARCHITECTURE.md`, `docs/INFRASTRUCTURE_ARCHITECTURE.md`,
+  `docs/ENGINEERING_STANDARDS.md` — three permanent, binding engineering
+  standards documents.
+- New `docs/DECISIONS.md` entries recording the backend architecture and
+  DR re-scope decisions, and the standards-creation/review decision.
+
+### Changed
+- Independent architecture review of all four documents together,
+  resulting in fixes to internal cross-references, a supersession note
+  resolving duplicated policy between `docs/BACKEND_ARCHITECTURE.md` §16
+  and `docs/SECURITY_ARCHITECTURE.md`, an explicit CI-before-Phase-1
+  sequencing requirement, and a documented bootstrap-admin mechanism.
+- `docs/ROADMAP.md`'s Sprint 2–9+ plan renumbered and re-scoped to match
+  the approved backend design's actual phase plan (Sprint 2 marked
+  complete; Sprint 3 redefined as Backend Foundation), with the
+  cross-reference cascade applied to `docs/DASHBOARD_SPEC.md`,
+  `docs/ENGINEERING_STANDARDS.md`, `CONTRIBUTING.md`.
+- `docs/PROJECT_STATUS.md` updated to reflect the architecture freeze,
+  current phase, and next milestone.
+- Tagged `v0.1.2-architecture-baseline`.
+
 ## [0.1.1] - 2026-07-30
 
 ### Added
