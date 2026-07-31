@@ -749,3 +749,80 @@ returned by `deliveryRouter.listDeliverySlots`) are purely informational
 — nothing enforces them. This is an accepted, zero-cost gap in practice:
 nothing calls `saveOrder` with a real client before Sprint 4, so there is
 no window in which a real customer could actually overbook a slot.
+
+---
+
+## 2026-07-31 — Sprint 4 client-side tRPC access: vanilla `@trpc/client` only, no TanStack Query
+
+**Decision:** The client side of the tRPC cutover uses a single vanilla
+proxy client (`createTRPCClient<AppRouter>`, `lib/trpc-client.ts`) with an
+`httpLink` pointed at `/api/trpc`. No `@tanstack/react-query` or
+`@trpc/tanstack-react-query` is added, and no `QueryClientProvider` is
+introduced. `services/orders.ts`'s imperative functions call it directly;
+`hooks/use-order-progress.ts`'s polling replacement calls it inside the
+same `useEffect`/`setInterval` lifecycle the hook already has today (see
+below), rather than switching to `useQuery({ refetchInterval })`.
+
+**Why:** Compared against adding TanStack Query for the sake of the
+polling hook. Rejected because Sprint 4 has exactly one read call site
+(`getOrder`, via the tracker) and one write call site (`saveOrder`, via
+checkout) — neither benefits from React Query's actual value proposition
+(cache sharing/invalidation/dedup across *multiple* independent
+consumers of the same query), and adding it now means standing up a
+global provider (`providers/` has been deliberately empty since Sprint 1)
+for a use case nothing in this sprint exercises. The vanilla client
+satisfies both call sites' actual requirements — imperative async calls
+from non-hook code, and interval-based refetching inside an existing
+hook — with one new dependency instead of two, and no new provider tree.
+If a later sprint adds a second, independent consumer that genuinely
+needs shared caching (e.g. admin dashboard live KPIs), upgrading is a
+contained, additive change — nothing built here needs to be undone to
+get there.
+
+---
+
+## 2026-07-31 — `services/orders.ts` becomes a UI/tRPC adapter, not a persistence abstraction, in Sprint 4
+
+**Decision:** When Sprint 4 cuts `services/orders.ts` over to call the real
+`ordersRouter` (via a vanilla `@trpc/client` instance — see the client-
+architecture note below), the module's responsibility changes from
+"localStorage persistence" to a thin adapter between the UI's domain types
+and the tRPC contract. Its exported functions (`saveOrder`, `getOrder`)
+own request/response **mapping only**:
+
+- UI/cart state → `saveOrderInput` (flattening `CartLine[]` into
+  `items[]`; attaching the customer/address/slot fields collected in
+  checkout).
+- tRPC response → UI-facing order model (composing the confirmation view
+  from the submitted cart data plus the server's
+  `{id, orderNumber, createdAt}`, since `saveOrder` doesn't echo back
+  items/address/total).
+- Transport normalization only — e.g. `Prisma.Decimal` fields
+  (`subtotal`/`deliveryFee`/`total`) arrive as strings (no `superjson` or
+  other transformer is configured on `initTRPC` in `server/trpc/trpc.ts`),
+  converted to numbers here.
+
+It MUST NOT contain business rules, pricing computation, validation, or
+persistence decisions — those stay server-side in `ordersRouter`.
+`generateOrderId()` is removed entirely; order ids are now server-generated
+opaque `cuid()`s.
+
+**Why:** Evaluated against removing the module and having
+`checkout/page.tsx`/`order-tracker-loader.tsx` call the tRPC client
+directly. Rejected removal because the mapping above (cart→input,
+response→confirmation view, Decimal→number) is real work this cutover
+needs today, not a wrapper kept out of habit — removing the module would
+relocate that logic into two components instead of centralizing it,
+reintroducing the same "two independently-duplicated patterns" risk this
+project already hit once (this file's `lib/cart-store.ts`/
+`services/orders.ts` persistence-duplication entry, above). The old
+justification for `services/` — protecting components from a hand-rolled
+localStorage client swap — no longer applies once tRPC provides end-to-end
+type safety directly; this entry replaces it with a narrower, current one.
+
+**Trade-off / guardrail:** This draws the module's boundary narrower than
+"everything to do with orders." If implementation reveals it accumulating
+logic beyond pure mapping — re-deriving totals, re-validating input, retry
+or caching policy — that's a signal to stop and flag it for review rather
+than let the adapter grow into a second domain layer. `ordersRouter`
+remains the single place business rules live.
