@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
@@ -9,10 +9,13 @@ import {
   ChevronRight,
   Loader2,
   Lock,
+  Mail,
   MapPin,
   PackageCheck,
+  Phone,
   ShieldCheck,
   Truck,
+  User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +28,7 @@ import {
   cartSubtotal,
   type CartLine,
 } from "@/lib/cart-store";
+import { useCheckoutStore } from "@/lib/checkout-store";
 import { deliverySlots } from "@/data/delivery";
 import { CheckoutSummary } from "@/components/tienda/checkout-summary";
 import { DELIVERY_FEE } from "@/constants/pricing";
@@ -42,9 +46,15 @@ export default function CheckoutPage() {
   const linesArray = useMemo(() => cartLinesArray(lines), [lines]);
   const subtotal = cartSubtotal(lines);
 
+  const ensureIdempotencyKey = useCheckoutStore((s) => s.ensureIdempotencyKey);
+  const clearIdempotencyKey = useCheckoutStore((s) => s.clearIdempotencyKey);
+
   const [currentStep, setCurrentStep] = useState(0);
   const [address, setAddress] = useState("Av. Belgrano 1248, San Miguel de Tucumán");
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [customerName, setCustomerName] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
   const [cardName, setCardName] = useState("");
   const [cardNumber, setCardNumber] = useState("");
   const [cardExpiry, setCardExpiry] = useState("");
@@ -52,7 +62,18 @@ export default function CheckoutPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState<StoredOrder | null>(null);
 
+  // Generated once per checkout session and persisted across a refresh —
+  // PR 4 reads this when it wires saveOrder's real idempotencyKey input.
+  useEffect(() => {
+    ensureIdempotencyKey();
+  }, [ensureIdempotencyKey]);
+
   const selectedSlot = deliverySlots.find((s) => s.id === selectedSlotId) ?? null;
+
+  const customerValid =
+    customerName.trim().length > 0 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail) &&
+    customerPhone.trim().length > 0;
 
   const paymentValid =
     cardName.trim().length > 2 &&
@@ -95,6 +116,9 @@ export default function CheckoutPage() {
       setIsSubmitting(false);
       setCurrentStep(3);
       clearCart();
+      // A successful order consumed this key; the next checkout (new cart,
+      // new order) must start with a fresh one, not reuse this one.
+      clearIdempotencyKey();
     }, 1200);
   }
 
@@ -211,8 +235,58 @@ export default function CheckoutPage() {
                 exit={{ opacity: 0, x: -12 }}
                 transition={{ duration: 0.25 }}
               >
-                <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
-                  <Label htmlFor="address" className="text-sm font-medium text-foreground">
+                <form
+                  className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft"
+                  onSubmit={(e) => e.preventDefault()}
+                >
+                  <p className="text-sm font-medium text-foreground">Tus datos de contacto</p>
+                  <div className="mt-3 flex flex-col gap-4">
+                    <div>
+                      <Label htmlFor="customerName">Nombre completo</Label>
+                      <div className="relative mt-1.5">
+                        <User className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          id="customerName"
+                          value={customerName}
+                          onChange={(e) => setCustomerName(e.target.value)}
+                          autoComplete="name"
+                          className="pl-10"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <Label htmlFor="customerEmail">Correo electrónico</Label>
+                        <div className="relative mt-1.5">
+                          <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            id="customerEmail"
+                            type="email"
+                            value={customerEmail}
+                            onChange={(e) => setCustomerEmail(e.target.value)}
+                            autoComplete="email"
+                            className="pl-10"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <Label htmlFor="customerPhone">Teléfono</Label>
+                        <div className="relative mt-1.5">
+                          <Phone className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            id="customerPhone"
+                            type="tel"
+                            value={customerPhone}
+                            onChange={(e) => setCustomerPhone(e.target.value)}
+                            autoComplete="tel"
+                            className="pl-10"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Label htmlFor="address" className="mt-6 block text-sm font-medium text-foreground">
                     Dirección de entrega
                   </Label>
                   <div className="relative mt-2">
@@ -221,6 +295,7 @@ export default function CheckoutPage() {
                       id="address"
                       value={address}
                       onChange={(e) => setAddress(e.target.value)}
+                      autoComplete="street-address"
                       className="pl-10"
                     />
                   </div>
@@ -274,7 +349,7 @@ export default function CheckoutPage() {
                       );
                     })}
                   </div>
-                </div>
+                </form>
 
                 <div className="mt-6 flex justify-between">
                   <Button variant="ghost" onClick={() => setCurrentStep(0)}>
@@ -282,7 +357,7 @@ export default function CheckoutPage() {
                   </Button>
                   <Button
                     size="lg"
-                    disabled={!selectedSlotId}
+                    disabled={!selectedSlotId || !customerValid}
                     className="rounded-full bg-brand-navy px-8 text-white hover:bg-brand-navy-light"
                     onClick={() => setCurrentStep(2)}
                   >
