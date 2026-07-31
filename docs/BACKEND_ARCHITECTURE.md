@@ -1544,7 +1544,15 @@ is the moment components stop needing to change at all — the whole point
 of Sprint 1 having isolated this behind a `services/` boundary in the
 first place. Resolve the two-persistence-pattern duplication flagged in
 `docs/DECISIONS.md` (`lib/cart-store.ts` vs. `services/orders.ts`) *before*
-this phase, not after — see §21 in the Risks table.
+this phase, not after — see §21 in the Risks table. `generateOrderId()`
+must also stop producing the current "MO-" + small-numeric-range format
+as the real `Order.id` — per `docs/DECISIONS.md`'s "Order tracking
+identifiers must not be enumerable" entry, the primary identifier becomes
+an opaque CUID/UUID, with that same "MO-xxxxx" style string retained only
+as a separate, non-secret `orderNumber` field for customer/support display.
+This is a prerequisite for this phase, not an optional follow-up — real
+orders must never be written to the shared database under the enumerable
+format, even briefly.
 
 **Phase 4 — Replace the order-status simulation.** Swap
 `hooks/use-order-progress.ts`'s wall-clock derivation for a subscription
@@ -1636,6 +1644,7 @@ pricing changes over time.
 | Scope creep — attempting to build all 8 dashboard modules' backends simultaneously | Follow the phased order above and `docs/ROADMAP.md`'s sprint structure: Orders + Catalog + Auth first, everything else after, one module at a time, matching `docs/DASHBOARD_SPEC.md`'s own stated module dependencies. |
 | The current `services/` abstraction is only as valuable as the discipline to keep using it | Any future change to how orders/catalog/etc. are fetched should go through `services/`'s existing seam (or its future router equivalents), never a component reaching directly into Prisma or a fetch call — this is the entire reason Sprint 1 introduced that boundary. |
 | Two independently-duplicated persistence patterns already exist today (`lib/cart-store.ts`'s Zustand persistence vs. `services/orders.ts`'s hand-rolled localStorage), flagged in `docs/DECISIONS.md` | Resolve this *before* Phase 3 above, not after — migrating two different patterns to Postgres separately is more work than unifying them first, then migrating once. |
+| `generateOrderId()`'s current "MO-" + small-numeric-range format (~10,000 possible values) is trivially enumerable, and PR 6 exposed a public, unauthenticated `getOrder(id)` procedure over it — see `docs/DECISIONS.md`'s "Order tracking identifiers must not be enumerable" entry | Switch to an opaque CUID/UUID as `Order.id` before Phase 3 writes any real order to the shared database, with "MO-xxxxx" retained only as a separate, non-secret `orderNumber` display field — a Phase 3 prerequisite, not an optional hardening pass. |
 | Auth.js's self-hosted model means this team owns MFA/session UX that a managed provider would ship for free (§1.5) | Budget real implementation time for §16.3/16.4 explicitly — it's a deliberate trade for lower long-term vendor cost, not a gap to discover mid-sprint. |
 | DR payment-gateway (Azul/CardNet) integration has thinner global documentation/community support than a Stripe-equivalent decision would | Budget more integration and support time than a Stripe-based estimate would suggest; confirm current certificate/API requirements directly with each provider before implementation, since DR-specific gateway documentation changes are less likely to be reflected in third-party tutorials. |
 | WhatsApp Business template approval (§12) is a calendar-time dependency, not an instant integration step | Register and submit templates for approval well before Phase 6/notification work is scheduled to ship, so approval lead time doesn't block the migration timeline. |

@@ -67,10 +67,14 @@ any component.
 Phase 3–4: resolve the `lib/cart-store.ts`/`services/orders.ts`
 persistence-pattern duplication flagged in `docs/DECISIONS.md` (a
 prerequisite, per `docs/BACKEND_ARCHITECTURE.md` §19's own note — not
-optional), swap `services/orders.ts`'s implementation to call the real
-backend without changing its exported signatures, then replace
-`hooks/use-order-progress.ts`'s wall-clock simulation with a subscription
-to real `OrderStatusEvent` data (polling to start).
+optional), switch `Order.id` to an opaque CUID/UUID with a separate
+`orderNumber` display field before any real order is written (also a
+prerequisite, not optional — see `docs/DECISIONS.md`'s "Order tracking
+identifiers must not be enumerable" entry), swap `services/orders.ts`'s
+implementation to call the real backend without changing its exported
+signatures, then replace `hooks/use-order-progress.ts`'s wall-clock
+simulation with a subscription to real `OrderStatusEvent` data (polling
+to start).
 
 ### Sprint 5 — Authentication, MFA & Admin Gating (Planned)
 Phase 5: real user accounts/sessions via Auth.js, the bootstrap-admin

@@ -474,3 +474,45 @@ silently extended):
    advisory's current state fresh on every run regardless of this
    allowlist, so a materially different advisory would need this entry's
    reasoning re-checked against the update.
+
+---
+
+## 2026-07-31 — Order tracking identifiers must not be enumerable before Sprint 4 wires real checkout
+
+**Decision:** `Order.id` will not be the "MO-" + small-numeric-range format
+`services/orders.ts`'s `generateOrderId()` currently produces (~10,000
+possible values — trivially enumerable, confirmed during PR 6's review of
+the read-only `ordersRouter`). Before Sprint 4 cuts `services/orders.ts`
+over to write real rows into a shared, network-reachable `Order` table,
+the order's actual identifier must be switched to an opaque,
+non-enumerable value (a CUID/UUID), with a separate, non-secret
+`orderNumber` field retained for customer-facing/support display
+(e.g., "MO-73042") — the identifier a human reads or quotes to support
+carries no access-granting power of its own.
+
+**Why:** The same small-keyspace id format was harmless while orders only
+ever lived in per-browser `localStorage` (pre-Sprint-3) — guessing a valid
+id got an attacker nothing, since storage was per-browser with no
+cross-user reachability. Sprint 3 moved `Order` into a shared Postgres
+database (`SECURITY_ARCHITECTURE.md` classifies `Order` as Confidential),
+and PR 6 added a public, unauthenticated `getOrder(id)` procedure matching
+the app's existing `/pedido/[id]` tracking-link behavior — at that point,
+the same id format became a real enumeration vector reachable by anyone
+over the network, not just a cosmetic legacy quirk. This was evaluated
+against three options (opaque id + friendly number; dedicated,
+expiring/revocable tracking tokens; requiring authenticated ownership) —
+full comparison on security, customer experience, support workflow,
+migration impact, and future marketplace compatibility is preserved
+alongside this entry. Opaque identifiers were chosen because they fully
+close the enumeration hole with no product/UX change and no dependency on
+Sprint 5's auth work, while not precluding either of the other two options
+being layered on later as additional hardening.
+
+**Trade-off:** Opaque identifiers alone do not prevent a leaked tracking
+link from being viewed by someone it wasn't intended for — bearer-link
+semantics are unchanged, just no longer brute-forceable. Revisiting
+dedicated tracking tokens (expiring/revocable) or requiring authenticated
+ownership is deferred to Sprint 5+, once real Auth.js session
+infrastructure exists and real order volume/PII exposure makes that
+additional hardening non-hypothetical — not ruled out, just not
+justified as a Sprint 3/4 cost today.
