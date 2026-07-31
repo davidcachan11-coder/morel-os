@@ -71,6 +71,13 @@ model User {
 
   accounts Account[]
   sessions Session[]
+
+  // Not unique — phone is deliberately never a merge/lookup key for
+  // customer resolution (see docs/DECISIONS.md's saveOrder entry), only
+  // ever queried for a best-effort duplicate-detection signal. Without
+  // this index, that lookup is a full table scan on every new-guest
+  // checkout — a real cost at scale, not just tidiness.
+  @@index([phone])
 }
 
 model Account {
@@ -119,11 +126,20 @@ model Branch {
   // required here per the approved DR schema but have no mock-data
   // equivalent; PR 3's seed script fills them with documented placeholder
   // values.
-  id           String @id @default(cuid())
+  id           String  @id @default(cuid())
   name         String
   province     String
   municipality String
   address      String
+  // The one operating branch, discovered from data rather than external
+  // config — saveOrder queries for this rather than requiring every
+  // environment to know a generated Branch.id. At most one row may ever
+  // have this true: enforced by a partial unique index added by hand in
+  // this model's migration (Prisma's schema DSL has no syntax for a
+  // conditional/partial unique constraint). See docs/DECISIONS.md's
+  // "saveOrder stays in Sprint 3" entry. A dedicated Branch Assignment
+  // Service replaces this once Morel expands beyond one location.
+  isDefault    Boolean @default(false)
 
   orders Order[]
   // inventoryItems, employees relations added once those models land
@@ -230,7 +246,19 @@ model DeliverySlot {
 }
 
 model Order {
-  id             String   @id @default(cuid())
+  id String @id @default(cuid())
+
+  // Human-readable display/support number (e.g. "MO-100032"). Never used
+  // for lookup/authorization; id is the real access key. Generated from a
+  // standalone Postgres sequence (order_number_seq, created by hand in
+  // this field's migration — see docs/DECISIONS.md's order-id entry) that
+  // is NOT a Prisma model field: a sequence tied to a selectable column
+  // would appear in every generated Order type, one unguarded findMany()
+  // away from leaking order-volume/rate as a side effect. A schema-
+  // invisible sequence makes that leak structurally impossible rather
+  // than just procedurally discouraged.
+  orderNumber String @unique
+
   customerId     String
   branchId       String
   deliverySlotId String

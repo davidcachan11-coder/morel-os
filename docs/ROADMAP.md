@@ -67,12 +67,21 @@ any component.
 Phase 3–4: resolve the `lib/cart-store.ts`/`services/orders.ts`
 persistence-pattern duplication flagged in `docs/DECISIONS.md` (a
 prerequisite, per `docs/BACKEND_ARCHITECTURE.md` §19's own note — not
-optional), switch `Order.id` to an opaque CUID/UUID with a separate
-`orderNumber` display field before any real order is written (also a
-prerequisite, not optional — see `docs/DECISIONS.md`'s "Order tracking
-identifiers must not be enumerable" entry), swap `services/orders.ts`'s
-implementation to call the real backend without changing its exported
-signatures, then replace `hooks/use-order-progress.ts`'s wall-clock
+optional), swap `services/orders.ts`'s implementation to call the real
+backend (`ordersRouter.saveOrder`/`getOrder`, both implemented in Sprint 3
+— see `docs/DECISIONS.md`'s "saveOrder stays in Sprint 3" entry, which
+also already resolved the opaque `Order.id`/`orderNumber` switch, so this
+phase's job is only removing `generateOrderId()`'s call site, not the id
+scheme itself) without changing its exported signatures, **add request
+idempotency to `saveOrder`** (a required, client-supplied idempotency
+key — deliberately deferred from Sprint 3, not forgotten, see
+`docs/DECISIONS.md`'s "saveOrder idempotency is deferred to Sprint 4"
+entry — this is a required part of this cutover, not optional hardening)
+and **delivery-slot capacity enforcement** (checking and atomically
+decrementing `DeliverySlot.spotsLeft`, deferred from Sprint 3 for the
+same reason — see `docs/DECISIONS.md`'s "Delivery-slot capacity
+management is deferred to Sprint 4" entry), then replace
+`hooks/use-order-progress.ts`'s wall-clock
 simulation with a subscription to real `OrderStatusEvent` data (polling
 to start).
 

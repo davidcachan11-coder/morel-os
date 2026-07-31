@@ -31,11 +31,14 @@ const PLACEHOLDER_BRANCH_ADDRESS =
 const PLACEHOLDER_ORDER_ADDRESS = "Dirección de pedido pendiente de definir";
 const PLACEHOLDER_EMAIL_DOMAIN = "placeholder.morel.local";
 
-// Fixed, reproducible id for the one fully-detailed seed order (built from
-// data/orders.ts's buildDemoOrder + demoOrderItems, the only mock data with
-// real product/quantity-level detail). Arbitrary but stable across seed
-// runs, following services/orders.ts's generateOrderId() "MO-7xxxx" format.
-const DEMO_ORDER_ID = "MO-79001";
+// Fixed, reproducible human-readable number for the one fully-detailed seed
+// order (built from data/orders.ts's buildDemoOrder + demoOrderItems, the
+// only mock data with real product/quantity-level detail). Arbitrary but
+// stable across seed runs. Order.id itself is no longer explicitly
+// supplied — per docs/DECISIONS.md's order-id entry, it's the DB-generated
+// opaque cuid; this "MO-xxxxx" value now lives on Order.orderNumber, the
+// non-secret, human-readable field, exactly as that decision specifies.
+const DEMO_ORDER_NUMBER = "MO-79001";
 
 const STATUS_MAP: Record<OrderStatusId, OrderStatus> = {
   confirmado: "CONFIRMADO",
@@ -58,6 +61,14 @@ function slugify(input: string): string {
 // buildSeedData — pure transformation of data/*.ts into row shapes matching
 // prisma/schema.prisma. No Prisma calls here, so this half of the script can
 // be exercised (and its output inspected) without a database connection.
+//
+// Order rows carry `orderNumber`, not `id` — Order.id is DB-generated
+// (@default(cuid())) since the earlier explicit-string-id approach was
+// exactly the enumerable-identifier problem docs/DECISIONS.md's order-id
+// entry resolved. OrderItem/OrderStatusEvent rows are keyed by
+// `orderNumber` here (not yet a real orderId) — seedDatabase() below
+// resolves the real, DB-assigned order ids after inserting orders, then
+// substitutes them in before inserting these dependent rows.
 // ---------------------------------------------------------------------------
 
 export function buildSeedData() {
@@ -106,13 +117,18 @@ export function buildSeedData() {
   }));
 
   // Placeholder: province/municipality/address have no equivalent on
-  // data/admin.ts's branch name strings.
-  const branchRows = branches.map((name) => ({
+  // data/admin.ts's branch name strings. The first branch is marked
+  // isDefault — Morel operates a single real location (Mao) today;
+  // saveOrder discovers this row via Branch.isDefault rather than any
+  // config value. See docs/DECISIONS.md's "saveOrder stays in Sprint 3"
+  // entry.
+  const branchRows = branches.map((name, index) => ({
     id: `branch-${slugify(name)}`,
     name,
     province: PLACEHOLDER_PROVINCE,
     municipality: PLACEHOLDER_MUNICIPALITY,
     address: PLACEHOLDER_BRANCH_ADDRESS,
+    isDefault: index === 0,
   }));
 
   // Every Customer/Driver requires a linked User (see docs/DECISIONS.md's
@@ -136,7 +152,7 @@ export function buildSeedData() {
   // fields the source string never had, so they're placeholders. The
   // other 19 customers have no address data anywhere in the mock data —
   // no Address row is fabricated for them.
-  const demoOrder = buildDemoOrder(DEMO_ORDER_ID);
+  const demoOrder = buildDemoOrder(DEMO_ORDER_NUMBER);
   const demoCustomerId = `customer-${slugify(demoOrder.customerName)}`;
 
   const addressRows = [
@@ -160,7 +176,7 @@ export function buildSeedData() {
   // branchId (buildDemoOrder has no branch field at all; placeholder:
   // assigned to the first seeded branch).
   const demoOrderRow = {
-    id: demoOrder.id,
+    orderNumber: DEMO_ORDER_NUMBER,
     customerId: demoCustomerId,
     branchId: branchRows[0].id,
     deliverySlotId: demoOrder.slot.id,
@@ -172,8 +188,8 @@ export function buildSeedData() {
   };
 
   const demoOrderItemRows = demoOrder.items.map((item, index) => ({
-    id: `orderitem-${demoOrder.id}-${index}`,
-    orderId: demoOrder.id,
+    id: `orderitem-${DEMO_ORDER_NUMBER}-${index}`,
+    orderNumber: DEMO_ORDER_NUMBER,
     productId: item.product.id,
     quantity: item.quantity,
     neverSubstitute: item.neverSubstitute,
@@ -181,14 +197,14 @@ export function buildSeedData() {
 
   const demoOrderStatusEventRows = [
     {
-      id: `statusevent-${demoOrder.id}-1`,
-      orderId: demoOrder.id,
+      id: `statusevent-${DEMO_ORDER_NUMBER}-1`,
+      orderNumber: DEMO_ORDER_NUMBER,
       status: "CONFIRMADO" as OrderStatus,
       createdAt: new Date(demoOrder.createdAt),
     },
   ];
 
-  // The 20 admin-dashboard orders (data/admin.ts's adminOrders). These only
+  // The 19 admin-dashboard orders (data/admin.ts's adminOrders). These only
   // ever carried summary fields (itemCount, total) — never real line
   // items — so no OrderItem rows are created for them; fabricating
   // specific products/quantities that never existed in the mock data
@@ -200,7 +216,7 @@ export function buildSeedData() {
     const minutesAgo = parseInt(order.placedAgo, 10);
     const createdAt = new Date(Date.now() - minutesAgo * 60_000);
     return {
-      id: order.id,
+      orderNumber: order.id,
       customerId: `customer-${slugify(order.customerName)}`,
       branchId: `branch-${slugify(order.branch)}`,
       deliverySlotId: deliverySlotRows[0].id,
@@ -217,7 +233,7 @@ export function buildSeedData() {
     const createdAt = new Date(Date.now() - minutesAgo * 60_000);
     return {
       id: `statusevent-${order.id}-1`,
-      orderId: order.id,
+      orderNumber: order.id,
       status: STATUS_MAP[order.status],
       createdAt,
     };
@@ -267,9 +283,10 @@ async function seedDatabase(prisma: PrismaClient) {
   // inserted — not data.length, which is how many rows were *attempted*.
   // On a fresh database the two match; on a re-run against an
   // already-seeded database, skipDuplicates means every row conflicts on
-  // its primary key and count comes back 0 for every table. Logging the
-  // real count (not data.length) makes that distinction visible instead
-  // of silently implying a re-run inserted data it actually skipped.
+  // its primary key (or, for Order, its unique orderNumber) and count
+  // comes back 0 for every table. Logging the real count (not
+  // data.length) makes that distinction visible instead of silently
+  // implying a re-run inserted data it actually skipped.
   const categoryResult = await prisma.category.createMany({
     data: data.categoryRows,
     skipDuplicates: true,
@@ -302,16 +319,45 @@ async function seedDatabase(prisma: PrismaClient) {
     data: data.addressRows,
     skipDuplicates: true,
   });
+
+  // Order.id is DB-generated (opaque cuid) — createMany can't return
+  // generated values, so orderNumber (unique, and the value we actually
+  // have ahead of time) is the matching key. skipDuplicates still works
+  // correctly here: a re-run's insert attempt violates orderNumber's
+  // unique constraint even though id would otherwise be a fresh cuid.
   const orderResult = await prisma.order.createMany({
     data: data.orderRows,
     skipDuplicates: true,
   });
+
+  // Re-read every seeded order by orderNumber (whether just-inserted or
+  // already present from a prior run) to get the real, DB-assigned id —
+  // this is what OrderItem/OrderStatusEvent below actually need.
+  const seededOrders = await prisma.order.findMany({
+    where: { orderNumber: { in: data.orderRows.map((o) => o.orderNumber) } },
+    select: { id: true, orderNumber: true },
+  });
+  const orderIdByNumber = new Map(
+    seededOrders.map((o) => [o.orderNumber, o.id])
+  );
+
+  const orderItemRows = data.orderItemRows.map(({ orderNumber, ...rest }) => ({
+    ...rest,
+    orderId: orderIdByNumber.get(orderNumber)!,
+  }));
+  const orderStatusEventRows = data.orderStatusEventRows.map(
+    ({ orderNumber, ...rest }) => ({
+      ...rest,
+      orderId: orderIdByNumber.get(orderNumber)!,
+    })
+  );
+
   const orderItemResult = await prisma.orderItem.createMany({
-    data: data.orderItemRows,
+    data: orderItemRows,
     skipDuplicates: true,
   });
   const orderStatusEventResult = await prisma.orderStatusEvent.createMany({
-    data: data.orderStatusEventRows,
+    data: orderStatusEventRows,
     skipDuplicates: true,
   });
 
@@ -325,8 +371,8 @@ async function seedDatabase(prisma: PrismaClient) {
     customers: `${customerResult.count}/${data.customerRows.length}`,
     addresses: `${addressResult.count}/${data.addressRows.length}`,
     orders: `${orderResult.count}/${data.orderRows.length}`,
-    orderItems: `${orderItemResult.count}/${data.orderItemRows.length}`,
-    orderStatusEvents: `${orderStatusEventResult.count}/${data.orderStatusEventRows.length}`,
+    orderItems: `${orderItemResult.count}/${orderItemRows.length}`,
+    orderStatusEvents: `${orderStatusEventResult.count}/${orderStatusEventRows.length}`,
   });
 }
 

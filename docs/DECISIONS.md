@@ -516,3 +516,236 @@ ownership is deferred to Sprint 5+, once real Auth.js session
 infrastructure exists and real order volume/PII exposure makes that
 additional hardening non-hypothetical — not ruled out, just not
 justified as a Sprint 3/4 cost today.
+
+---
+
+## 2026-07-31 — `ordersRouter.saveOrder` stays in Sprint 3; guest checkout, customer resolution, and the order-id fix land together
+
+**Decision:** The above entry's "before Sprint 4" framing is superseded, not
+retracted: on review, the reason originally given for deferring
+`saveOrder` to Sprint 4 (the enumerable-id coupling) didn't actually hold
+up — a `saveOrder` procedure just persists whatever `id` it's given, it
+doesn't decide the format. The real blocker was a different, previously
+unnamed one: `Order.customerId`/`Customer.userId` are required foreign
+keys, and today's checkout (`app/tienda/checkout/page.tsx`) hardcodes
+`customerName: "Camila Ferreyra"` with no real identity capture at all —
+there was no legitimate way to resolve a `Customer` for an anonymous
+checkout. `saveOrder` stays in Sprint 3; that identity question is
+resolved instead, and the order-id/`orderNumber` schema change from the
+entry above ships as part of this work, not Sprint 4.
+
+**Guest checkout — customer identity:**
+- Every checkout collects **name, email, and phone** (a business
+  requirement, not just a technical convenience) and auto-creates a
+  `User` (role `CUSTOMER`) + `Customer` — no login required, matching the
+  app's actual current checkout experience.
+- **Resolution is keyed on email only.** Email is the sole database-
+  enforced-unique signal (`User.email @unique`); an existing `User` found
+  by email is unambiguously the same account. Phone is captured and
+  stored but is **never** a merge key — a shared/family phone number is a
+  plausible benign explanation for a match, and merging identity on it
+  risks attaching one person's order history to someone else. If a
+  checkout's phone matches an existing, *different* email's account, that
+  is logged as a `possible_duplicate_customer` signal (structured, with
+  the request's correlation id) for future reconciliation tooling — never
+  auto-merged. True de-duplication across two different emails belonging
+  to the same real person requires proof of ownership, which doesn't
+  exist before Sprint 5.
+- **Returning customers (matched by email) never have their stored
+  `name`/`phone` overwritten** by a fresh checkout submission. An
+  unauthenticated submission is not proof of account ownership; silently
+  allowing it to overwrite existing data is an integrity risk (accidental
+  typo or deliberate tampering), not a freshness trade-off worth taking.
+  A verified update path is Sprint 5's authenticated profile-edit, not
+  this procedure. Implemented as an atomic `prisma.user.upsert` keyed on
+  email with an empty `update: {}` — race-safe by construction, not a
+  manual find-then-create with its own concurrency risk.
+- Explicitly rejected: matching on email *or* phone (real false-merge
+  risk — two different people can share a phone); always overwriting
+  name/phone on repeat checkout (the integrity risk above); nullable
+  `Order.customerId` with orders linked to a `Customer` later (would
+  reverse the already-shipped, already-migrated required-FK schema from
+  PR 2, and requires building a "claim my orders" feature nothing in this
+  product currently needs); requiring authentication for all checkout
+  (correct long-term, but can't deliver a working `saveOrder` before
+  Sprint 5, and this product has never indicated "account required to
+  buy groceries" as the intended experience).
+
+**Branch — discovered from the database, not an assignment service:**
+Morel operates one physical location (Mao) today. `Branch` gains an
+`isDefault: Boolean` column (matching the existing `Address.isDefault`
+convention in this same schema), and `saveOrder` queries
+`findFirst({ where: { isDefault: true } })` — no selection algorithm, no
+geocoding, no branch-assignment logic, no environment configuration to
+keep in sync. This was chosen over an env-var-based
+`DEFAULT_BRANCH_ID` (the originally implemented approach) because it
+doesn't survive this project's own already-decided infrastructure:
+Neon's branch-per-PR preview databases (`INFRASTRUCTURE_ARCHITECTURE.md`
+§6) generate a fresh, random `Branch.id` on every seed run, so an env var
+would need to be correctly re-set for every ephemeral preview
+environment — impractical at any real PR volume, and nothing this
+project's Vercel/Neon setup automates today. A partial unique index
+(`CREATE UNIQUE INDEX ... ON "Branch" ("isDefault") WHERE "isDefault" =
+true`, hand-authored in this migration since Prisma's schema DSL has no
+partial-index syntax) guarantees at most one row is ever the default;
+`saveOrder` fails loudly (`INTERNAL_SERVER_ERROR`, "no branch is marked
+as default") if none is. `branchId` is not part of `saveOrder`'s
+client-facing input at all, since there is currently no decision for a
+client to express. When Morel expands to multiple branches, a dedicated
+Branch Assignment Service becomes a separate, later architectural
+evolution that resolves a `branchId` and hands it to `saveOrder`
+unchanged — `saveOrder`'s responsibility stays exactly "retrieve the
+default branch, validate it exists," then and now.
+
+**`orderNumber` generation — a standalone sequence, not a Prisma field:**
+`order_number_seq` is created directly in this migration
+(`CREATE SEQUENCE`), deliberately *not* a Prisma model field (the
+originally implemented approach used `Order.orderSeq Int
+@default(autoincrement())`). A sequence tied to a selectable column
+appears in every generated `Order` TypeScript type — one unguarded
+`findMany()` without an explicit `select` away from returning a
+monotonically increasing counter that directly reveals order volume and,
+by comparing two rows' values, order rate — exactly the kind of internal
+business metric `SECURITY_ARCHITECTURE.md`'s data classification treats
+as sensitive. A schema-invisible sequence makes that leak structurally
+impossible rather than relying on every future query remembering to
+exclude one field. `saveOrder` references it directly by name
+(`nextval('order_number_seq')`) before its single `order.create()` call,
+same as before — the only change is that the sequence is no longer
+attached to any column.
+
+**Schema fields evaluated and explicitly not added, with why:**
+- `isGuest` (or similar) — not needed, likely never as a stored field.
+  Whether a `Customer` is a guest is already fully derivable from whether
+  their linked `User` has any `Account` rows (a real Auth.js sign-in). A
+  redundant flag could drift from this; the derived definition cannot.
+- `emailVerified`/`phoneVerified` — Sprint 5. No verification mechanism
+  (OTP, confirmation link) exists yet; collecting a field isn't the same
+  as verifying it, and the field would be uniformly meaningless on every
+  row created today.
+- Marketing consent, CRM/lifecycle fields — Sprint 9+ (Marketing). No UI
+  asks the question yet; nothing is lost by adding these when it does.
+- `User.phone` uniqueness/format validation — not now. SMS/WhatsApp
+  passwordless auth was explicitly framed as a future maybe, not a
+  decision; adding a constraint now would mean guessing at requirements
+  that don't exist.
+- `User.name`/`User.phone` stay nullable at the schema level — the
+  business rule is enforced as required `saveOrder` Zod inputs, not a
+  blanket table constraint, since `User` is shared across `CUSTOMER`,
+  `DRIVER`, and staff roles whose account-creation flows (and data-
+  capture rules) aren't designed yet.
+
+**Why (overall):** Every alternative considered either reversed schema
+work already shipped, built a feature (claim flow, branch assignment
+service) nothing currently needs, or couldn't produce a working
+`saveOrder` before Sprint 5 — none of which was necessary once the actual
+blocker (customer identity, not id format) was correctly identified.
+
+**Trade-off:** Guest checkouts accumulate `User`/`Customer` rows that may
+never be claimed by a real account — accepted, since email-keyed
+resolution means a returning guest reuses the same row rather than
+multiplying, and Sprint 5's Auth.js account-linking (matching by email)
+attaches real login to this same row with no migration needed. Auth.js's
+default adapter does not auto-link a new OAuth sign-in to an existing
+User with the same email without explicit configuration
+(`allowDangerousEmailAccountLinking`) or a confirmation flow — Sprint 5
+must decide that explicitly, not inherit it silently from this design.
+
+---
+
+## 2026-07-31 — `saveOrder` idempotency is deferred to Sprint 4, deliberately — not a forgotten gap
+
+**Decision:** `ordersRouter.saveOrder` does **not** implement request
+idempotency in Sprint 3. Double-submission protection (a client-generated
+idempotency key, checked against `Order` before creating a new row) is a
+**required part of Sprint 4's checkout-cutover work** — the same PR that
+wires `services/orders.ts` to call `saveOrder` for real, not a separate,
+optional follow-up. This entry exists specifically so that omission reads
+as an intentional sequencing choice, not an oversight discovered later.
+
+**Why deferred rather than built now:** Client-generated idempotency keys
+(the correct, industry-standard mechanism — evaluated against request
+fingerprinting and payment-provider-anchored identifiers, both rejected:
+fingerprinting is heuristic/fuzzy where an explicit key is deterministic,
+and no payment step exists yet to anchor to before Sprint 6) only work
+correctly in concert with the client that generates and persists them —
+when the key is created, whether it survives a page refresh, when it's
+regenerated for a genuinely new order versus reused for a retry. None of
+that exists yet. Sprint 3's `saveOrder` was scoped to mirror
+`services/orders.ts`'s *existing* `saveOrder(order)` contract, which has
+no idempotency concept at all; adding one now would mean designing half
+of a two-sided mechanism (the server enforcement) against a client half
+that doesn't exist, and verifying it against an assumption instead of
+real behavior. This is the same reasoning already applied to branch
+assignment (`saveOrder` receives and validates a branch, it doesn't
+decide selection strategy, because there's no second branch yet to
+motivate designing one) — applied here with the same rigor rather than
+treated as a special case because implementation momentum already
+existed. Sprint 4 is the first point where the actual checkout UI's
+retry/refresh/double-submit behavior is knowable rather than guessed,
+and it is also the first point `saveOrder` has any real caller at all —
+so unlike a live contract with existing traffic, adding this requirement
+in Sprint 4 costs nothing extra: the first caller is written from
+scratch either way, in that sprint, regardless of whether the field
+existed one sprint earlier.
+
+**Why this isn't just "later, maybe":** Sprint 4 must implement, at
+minimum: a required, client-supplied idempotency key on `saveOrder`'s
+input (a UUID, per the client-generated-key pattern); an `Order`-level
+unique column storing it; an early, first-step lookup inside the
+transaction that returns an existing order's result unchanged if the key
+was already used (before re-running branch/slot/product validation);
+and a client-side strategy for generating and persisting the key across
+the checkout session (e.g., alongside `lib/cart-store.ts`'s existing
+persisted state) so a page refresh doesn't silently generate a new key
+and defeat the mechanism. No expiry/TTL logic or background job is
+needed — `Order` rows are permanent business records never deleted, so
+the key's lifetime is correctly bound to its Order's lifetime with
+nothing to clean up. The same key should be threaded through to Sprint
+6's payment-authorization call once that exists, so one key protects
+both the order row and the charge rather than two parallel mechanisms
+being invented.
+
+**Trade-off:** Between Sprint 4 shipping and this entry being written,
+`saveOrder` remains vulnerable to duplicate orders from double-clicks or
+client retries — accepted, because nothing calls `saveOrder` at all until
+Sprint 4, so the exposure window is exactly zero in practice. The
+alternative (building the mechanism speculatively now) would have traded
+a real, if brief, gap for a real, ongoing risk of designing the wrong
+contract against a client that doesn't exist yet.
+
+---
+
+## 2026-07-31 — Delivery-slot capacity management is deferred to Sprint 4, deliberately — not a forgotten gap
+
+**Decision:** `ordersRouter.saveOrder` validates that a requested
+`DeliverySlot` exists, but does not read, check, or decrement
+`DeliverySlot.spotsLeft`. Nothing today prevents an order from being
+placed against a slot already at zero remaining capacity, and no
+contention handling exists for concurrent orders against the same slot.
+Building this — an atomic decrement-with-check (e.g. a conditional
+`UPDATE ... WHERE spotsLeft > 0`, detecting and rejecting a "sold out"
+slot) plus deciding what that rejection returns to the client — is
+**deferred to whichever sprint wires real delivery-slot selection into
+the checkout UI (Sprint 4)**, not implemented now.
+
+**Why deferred rather than built now:** Slot capacity enforcement is a
+real, non-trivial feature with its own concurrency design (analogous in
+weight to the idempotency-key and branch-assignment decisions above),
+not a two-line addition to an existing check. It was never part of the
+contract Sprint 3 was scoped to mirror: the current, existing checkout
+(and `services/orders.ts`'s `StoredOrder`) never enforces slot capacity
+either — the mock flow is cosmetic. Sprint 3's goal is to faithfully
+mirror the existing infrastructure's behavior on real Postgres, not
+redesign checkout behavior beyond what exists today. Capacity management
+only becomes relevant once delivery slots are actually being consumed by
+a real checkout flow selecting among genuinely limited slots — which is
+Sprint 4's work, the same sprint already responsible for wiring
+`saveOrder` into real checkout and adding request idempotency.
+
+**Trade-off:** Between now and Sprint 4, a slot's displayed `spotsLeft`
+/`totalSpots`/`capacity` values (already present in the seeded data and
+returned by `deliveryRouter.listDeliverySlots`) are purely informational
+— nothing enforces them. This is an accepted, zero-cost gap in practice:
+nothing calls `saveOrder` with a real client before Sprint 4, so there is
+no window in which a real customer could actually overbook a slot.

@@ -891,6 +891,9 @@ DGII_NCF_SEQUENCE_PREFIX=  # per receipt type, confirm current DGII sequence rul
 FISCAL_ENVIRONMENT=        # "sandbox" | "production" — separate NCF sequences per environment
 
 # App
+# Note: the default operating branch is discovered from the database
+# (Branch.isDefault), not an env var — see docs/DECISIONS.md's "default
+# branch discovery" entry.
 NEXT_PUBLIC_APP_URL=       # only NEXT_PUBLIC_-prefixed var expected in this list —
                             # everything else must never reach the client bundle
 NODE_ENV=
@@ -1545,14 +1548,29 @@ of Sprint 1 having isolated this behind a `services/` boundary in the
 first place. Resolve the two-persistence-pattern duplication flagged in
 `docs/DECISIONS.md` (`lib/cart-store.ts` vs. `services/orders.ts`) *before*
 this phase, not after — see §21 in the Risks table. `generateOrderId()`
-must also stop producing the current "MO-" + small-numeric-range format
-as the real `Order.id` — per `docs/DECISIONS.md`'s "Order tracking
-identifiers must not be enumerable" entry, the primary identifier becomes
-an opaque CUID/UUID, with that same "MO-xxxxx" style string retained only
-as a separate, non-secret `orderNumber` field for customer/support display.
-This is a prerequisite for this phase, not an optional follow-up — real
-orders must never be written to the shared database under the enumerable
-format, even briefly.
+must stop producing the current "MO-" + small-numeric-range format as
+the caller-supplied id it passes into `saveOrder`'s `order` argument —
+`ordersRouter.saveOrder` itself was implemented in Sprint 3 already
+generating an opaque `Order.id` (`@default(cuid())`) with a separate
+`orderNumber` field for customer/support display, per `docs/DECISIONS.md`'s
+"Order tracking identifiers must not be enumerable" and "saveOrder stays
+in Sprint 3" entries — this phase's remaining work is only wiring
+`generateOrderId()`'s replacement/removal and the actual cutover, not the
+schema or router-level fix, which is already done. This phase also MUST
+add request idempotency to `saveOrder` (a required, client-supplied
+idempotency key, checked before any order is created) as part of wiring
+the real checkout flow, not a separate follow-up — deliberately deferred
+from Sprint 3 rather than forgotten, per `docs/DECISIONS.md`'s "saveOrder
+idempotency is deferred to Sprint 4" entry, since this is the first point
+`saveOrder` has a real caller at all and the first point the client's
+actual retry/refresh behavior is knowable rather than guessed. This
+phase must also add delivery-slot capacity enforcement (checking and
+atomically decrementing `DeliverySlot.spotsLeft` when an order is
+placed, rejecting a slot already at zero) — deliberately deferred from
+Sprint 3, not forgotten, per `docs/DECISIONS.md`'s "Delivery-slot
+capacity management is deferred to Sprint 4" entry, since it only
+becomes relevant once real checkout is actually selecting among
+genuinely limited slots.
 
 **Phase 4 — Replace the order-status simulation.** Swap
 `hooks/use-order-progress.ts`'s wall-clock derivation for a subscription
@@ -1644,7 +1662,9 @@ pricing changes over time.
 | Scope creep — attempting to build all 8 dashboard modules' backends simultaneously | Follow the phased order above and `docs/ROADMAP.md`'s sprint structure: Orders + Catalog + Auth first, everything else after, one module at a time, matching `docs/DASHBOARD_SPEC.md`'s own stated module dependencies. |
 | The current `services/` abstraction is only as valuable as the discipline to keep using it | Any future change to how orders/catalog/etc. are fetched should go through `services/`'s existing seam (or its future router equivalents), never a component reaching directly into Prisma or a fetch call — this is the entire reason Sprint 1 introduced that boundary. |
 | Two independently-duplicated persistence patterns already exist today (`lib/cart-store.ts`'s Zustand persistence vs. `services/orders.ts`'s hand-rolled localStorage), flagged in `docs/DECISIONS.md` | Resolve this *before* Phase 3 above, not after — migrating two different patterns to Postgres separately is more work than unifying them first, then migrating once. |
-| `generateOrderId()`'s current "MO-" + small-numeric-range format (~10,000 possible values) is trivially enumerable, and PR 6 exposed a public, unauthenticated `getOrder(id)` procedure over it — see `docs/DECISIONS.md`'s "Order tracking identifiers must not be enumerable" entry | Switch to an opaque CUID/UUID as `Order.id` before Phase 3 writes any real order to the shared database, with "MO-xxxxx" retained only as a separate, non-secret `orderNumber` display field — a Phase 3 prerequisite, not an optional hardening pass. |
+| `generateOrderId()`'s "MO-" + small-numeric-range format (~10,000 possible values) was trivially enumerable, and PR 6 exposed a public, unauthenticated `getOrder(id)` procedure over it — see `docs/DECISIONS.md`'s "Order tracking identifiers must not be enumerable" entry | **Resolved in Sprint 3**, not deferred to Phase 3: `saveOrder` generates an opaque `Order.id` (`@default(cuid())`) with a separate, non-secret `orderNumber` field for display — see `docs/DECISIONS.md`'s "saveOrder stays in Sprint 3" entry. Phase 3 only needs to remove/replace `generateOrderId()`'s call site, not the id scheme itself. |
+| `saveOrder` has no request idempotency — a double-click or client retry against the real checkout UI could create two distinct, fully valid orders from one logical submission | **Deliberately deferred to Phase 3, not forgotten** — see `docs/DECISIONS.md`'s "saveOrder idempotency is deferred to Sprint 4" entry. A required, client-supplied idempotency key must be part of the same PR that wires `services/orders.ts` to call `saveOrder` for real, not a separate follow-up; the exposure window is zero until then since nothing calls `saveOrder` before Phase 3. |
+| `saveOrder` validates a `DeliverySlot` exists but never checks or decrements `spotsLeft` — no overbooking protection or concurrency handling exists for slot capacity | **Deliberately deferred to Phase 3, not forgotten** — see `docs/DECISIONS.md`'s "Delivery-slot capacity management is deferred to Sprint 4" entry. Mirrors the existing checkout's behavior (which never enforced capacity either); only becomes relevant once a real client is actually selecting among genuinely limited slots. |
 | Auth.js's self-hosted model means this team owns MFA/session UX that a managed provider would ship for free (§1.5) | Budget real implementation time for §16.3/16.4 explicitly — it's a deliberate trade for lower long-term vendor cost, not a gap to discover mid-sprint. |
 | DR payment-gateway (Azul/CardNet) integration has thinner global documentation/community support than a Stripe-equivalent decision would | Budget more integration and support time than a Stripe-based estimate would suggest; confirm current certificate/API requirements directly with each provider before implementation, since DR-specific gateway documentation changes are less likely to be reflected in third-party tutorials. |
 | WhatsApp Business template approval (§12) is a calendar-time dependency, not an instant integration step | Register and submit templates for approval well before Phase 6/notification work is scheduled to ship, so approval lead time doesn't block the migration timeline. |
