@@ -380,3 +380,97 @@ production domain/environment until an explicit, separate cutover
 decision is made — deferred to whichever sprint first ships something
 production needs to actually serve. Until then, verification happens via
 Preview Deployments and local development only.
+
+---
+
+## 2026-07-31 — Sprint 3 CI: scoped `npm audit` exceptions for 5 currently-unreachable, non-breaking-fix-unavailable advisories
+
+**Decision:** The CI audit gate (`.github/workflows/ci.yml`, enforced by
+`.github/scripts/check-npm-audit.mjs`) runs `npm audit --audit-level=high`
+exactly as before — the threshold is not lowered and the step is not
+skipped or disabled. The build fails on any high/critical advisory except
+five specific ones, allowlisted primarily by their public **GHSA ID**
+(matched against the advisory URL `npm audit --json` reports for each
+finding). npm's internal numeric advisory `source` ID is kept only as a
+documented fallback in the script, used solely if a future advisory's URL
+doesn't expose a parseable GHSA ID — that fallback path prints a warning
+rather than matching silently, so it can't mask a mismatch. The five
+allowed advisories, GHSA ID first:
+
+- GHSA-mh99-v99m-4gvg (npm source `1124334`) — `brace-expansion` (DoS via
+  unbounded expansion length)
+- GHSA-qx2v-qp2m-jg93 (npm source `1117015`) — `postcss` (XSS via
+  unescaped `</style>` in stringify output; moderate severity in
+  isolation, reached via a package this audit flags as high overall)
+- GHSA-6g55-p6wh-862q (npm source `1124252`) — `postcss` (arbitrary file
+  read via attacker-controlled `sourceMappingURL`)
+- GHSA-r28c-9q8g-f849 (npm source `1124288`) — `postcss` (path traversal
+  via `sourceMappingURL` leading to arbitrary `.map` file disclosure)
+- GHSA-f88m-g3jw-g9cj (npm source `1124066`) — `sharp` (inherited libvips
+  CVEs: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591)
+
+This allowlists these five specific advisory records only, not the
+packages that carry them. A new advisory on `brace-expansion`, `postcss`,
+or `sharp` tomorrow — or on any other package — carries a different GHSA
+ID and fails the build exactly as it would without this mechanism. GHSA
+IDs were chosen as the primary key over npm's internal `source` numbers
+because they're public, stable across npm's own database changes, and
+match what this entry (and the script's own comments) are written
+against — reducing the risk that a future npm database renumbering
+silently widens or breaks the allowlist.
+
+**Why each is currently unreachable, and why no non-breaking fix exists:**
+
+`brace-expansion` reaches the app only through ESLint's `minimatch` →
+`@eslint/config-array`/`@eslint/eslintrc` chain, itself pulled in by the
+direct `eslint` and `eslint-config-next` devDependencies. It is exercised
+solely against developer-authored lint-config glob patterns at lint time
+— never against external or user-supplied input, and never present in
+the built application. Its only fix path is `eslint@10.x`, a semver-major
+version bump carrying real risk of lint-rule/config breakage; evaluating
+that upgrade is out of scope for a CI-stand-up PR and would be its own
+future change.
+
+`postcss`'s three advisories all live in Next.js's *private* nested copy
+(`next/node_modules/postcss@8.4.31`) — the project's own top-level
+`postcss@8.5.25`, used by Tailwind via `@tailwindcss/postcss`, is already
+patched and unaffected; confirmed by comparing both installed versions
+directly. All three require attacker-controlled CSS source content (a
+malicious stylesheet or an embedded comment) to trigger the file-read,
+path-traversal, or stringify-XSS behavior. This app has no user-submitted
+or externally-sourced CSS — every stylesheet is developer-authored and
+compiled at build time, so the trigger condition doesn't exist here. No
+independent upgrade path exists either: this is Next's own internal
+dependency, not something `npm install postcss@latest` reaches. A
+`package.json` `overrides` entry could force a newer version, but that
+would run Next's internal build pipeline against a `postcss` release it
+was never tested with — a nominal "non-breaking" fix that is in practice
+an unverified change to Next's own internals.
+
+`sharp` is nested at `next/node_modules/sharp@0.34.5` and powers
+`next/image`'s server-side optimization endpoint. A full grep of `app/`,
+`components/`, `lib/`, and `hooks/` confirms `next/image` is not imported
+anywhere in this codebase — consistent with the existing decision (see
+"Emoji + CSS gradients instead of product photography" above) to use
+emoji and CSS gradients rather than real images. The vulnerable code path
+isn't merely low-risk here, it is never executed. The same nested-
+dependency constraint on independent upgrades applies as with `postcss`.
+
+**Trade-off:** These five findings stay suppressed only until whichever
+of the following happens first — at that point this entry must be
+revisited (narrowed, removed, or superseded by a new dated entry, never
+silently extended):
+
+1. Next.js ships a release bumping its internal nested `postcss` and/or
+   `sharp` past the patched versions (`postcss` > 8.5.17, `sharp` >=
+   0.35.0) — re-run `npm audit` after any Next.js version bump to check.
+2. `eslint`/`eslint-config-next` are deliberately upgraded past their
+   current major versions, evaluated as its own separate change.
+3. `next/image` (or any other code path that would invoke `sharp`) is
+   introduced anywhere in the app — `sharp`'s exception must be
+   re-evaluated immediately, before merge, not after the fact.
+4. Any of these five advisory records themselves change scope (a broader
+   exploit vector, a reassessed severity) — `npm audit` evaluates each
+   advisory's current state fresh on every run regardless of this
+   allowlist, so a materially different advisory would need this entry's
+   reasoning re-checked against the update.
