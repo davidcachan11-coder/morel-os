@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
+import { TRPCClientError } from "@trpc/client";
+import { toast } from "sonner";
+import type { AppRouter } from "@/server/trpc/root";
 import {
   CheckCircle2,
   ChevronRight,
@@ -32,7 +35,7 @@ import { useCheckoutStore } from "@/lib/checkout-store";
 import { deliverySlots } from "@/data/delivery";
 import { CheckoutSummary } from "@/components/tienda/checkout-summary";
 import { DELIVERY_FEE } from "@/constants/pricing";
-import { generateOrderId, saveOrder, type StoredOrder } from "@/services/orders";
+import { saveOrder, type StoredOrder } from "@/services/orders";
 import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
 
 const steps = ["Sustituciones", "Entrega", "Pago", "Confirmación"];
@@ -95,31 +98,76 @@ export default function CheckoutPage() {
     }
   }
 
-  function handlePay() {
+  async function handlePay() {
     if (!paymentValid || !selectedSlot) return;
     setIsSubmitting(true);
-    setTimeout(() => {
-      const id = generateOrderId();
+    try {
+      const result = await saveOrder({
+        customer: {
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone,
+        },
+        deliverySlotId: selectedSlot.id,
+        address,
+        items: linesArray.map((line) => ({
+          productId: line.product.id,
+          quantity: line.quantity,
+          neverSubstitute: line.neverSubstitute,
+        })),
+        idempotencyKey: ensureIdempotencyKey(),
+      });
       const order: StoredOrder = {
-        id,
-        createdAt: new Date().toISOString(),
-        items: linesArray,
+        id: result.id,
+        orderNumber: result.orderNumber,
+        createdAt: result.createdAt,
+        items: linesArray.map((line) => ({
+          quantity: line.quantity,
+          neverSubstitute: line.neverSubstitute,
+          product: {
+            id: line.product.id,
+            name: line.product.name,
+            unit: line.product.unit,
+            price: line.product.price,
+            emoji: line.product.emoji,
+            gradient: line.product.gradient,
+          },
+        })),
         subtotal,
         deliveryFee: DELIVERY_FEE,
         total: subtotal + DELIVERY_FEE,
         address,
         slot: selectedSlot,
-        customerName: "Camila Ferreyra",
+        customerName,
       };
-      saveOrder(order);
       setConfirmedOrder(order);
-      setIsSubmitting(false);
       setCurrentStep(3);
       clearCart();
       // A successful order consumed this key; the next checkout (new cart,
       // new order) must start with a fresh one, not reuse this one.
       clearIdempotencyKey();
-    }, 1200);
+    } catch (error) {
+      // Deliberately does not clear the idempotency key — a retry with the
+      // same key is exactly what saveOrder's idempotency check is for, and
+      // this stays on the Pago step so the same click naturally becomes
+      // that retry.
+      //
+      // Only a deliberate business-rule TRPCError (BAD_REQUEST, CONFLICT —
+      // e.g. "Selected delivery slot is full.") is safe to show verbatim.
+      // INTERNAL_SERVER_ERROR (or anything else unexpected — a dropped
+      // connection, a genuine bug) can carry raw internal detail in its
+      // message and must never reach the customer as-is.
+      const isSafeToShow =
+        error instanceof TRPCClientError &&
+        error.data?.code !== undefined &&
+        error.data.code !== "INTERNAL_SERVER_ERROR";
+      const message = isSafeToShow
+        ? (error as TRPCClientError<AppRouter>).message
+        : "No pudimos procesar tu pedido. Intentá de nuevo.";
+      toast.error(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   if (linesArray.length === 0 && !confirmedOrder) {
@@ -477,7 +525,7 @@ export default function CheckoutPage() {
                     ¡Pedido confirmado!
                   </h2>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Tu pedido <span className="font-semibold text-foreground">#{confirmedOrder.id}</span>{" "}
+                    Tu pedido <span className="font-semibold text-foreground">#{confirmedOrder.orderNumber}</span>{" "}
                     está en camino a preparación.
                   </p>
 

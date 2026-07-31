@@ -1,43 +1,108 @@
 "use client";
 
-import { type CartLine } from "@/lib/cart-store";
-import { type DeliverySlot } from "@/data/delivery";
-import { STORAGE_KEYS } from "@/constants/storage";
+import { trpcClient } from "@/lib/trpc-client";
+
+export interface StoredOrderSlot {
+  id: string;
+  dayLabel: string;
+  dateLabel: string;
+  timeRange: string;
+  express?: boolean;
+}
+
+export interface StoredOrderItem {
+  quantity: number;
+  neverSubstitute: boolean;
+  product: {
+    id: string;
+    name: string;
+    unit: string;
+    price: number;
+    emoji: string;
+    gradient: string;
+  };
+}
 
 export interface StoredOrder {
   id: string;
+  orderNumber: string;
   createdAt: string;
-  items: CartLine[];
+  items: StoredOrderItem[];
   subtotal: number;
   deliveryFee: number;
   total: number;
   address: string;
-  slot: DeliverySlot;
+  slot: StoredOrderSlot;
   customerName: string;
 }
 
-function readAll(): Record<string, StoredOrder> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEYS.orders);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+export interface SaveOrderInput {
+  customer: { name: string; email: string; phone: string };
+  deliverySlotId: string;
+  address: string;
+  items: { productId: string; quantity: number; neverSubstitute: boolean }[];
+  idempotencyKey: string;
 }
 
-export function saveOrder(order: StoredOrder) {
-  if (typeof window === "undefined") return;
-  const all = readAll();
-  all[order.id] = order;
-  window.localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify(all));
+export interface SaveOrderResult {
+  id: string;
+  orderNumber: string;
+  createdAt: string;
 }
 
-export function getOrder(id: string): StoredOrder | null {
-  return readAll()[id] ?? null;
+// No `transformer` is configured on initTRPC (server/trpc/trpc.ts), so
+// Date/Decimal fields cross the wire as plain strings even though the
+// client's inferred type still says Date/Decimal — that inferred type
+// describes what the server function returns in TypeScript, not what
+// JSON.stringify actually produced. `new Date(...)`/`Number(...)` both
+// accept a real Date/Decimal instance *or* the wire string equally
+// correctly, so using them here is safe regardless of that mismatch —
+// unlike `.toISOString()` or Decimal's own methods, which would throw if
+// the value is actually already a plain string.
+function toIsoString(value: unknown): string {
+  return new Date(value as string | number | Date).toISOString();
 }
 
-export function generateOrderId(): string {
-  const num = 70000 + Math.floor(Math.random() * 9999);
-  return `MO-${num}`;
+export async function saveOrder(input: SaveOrderInput): Promise<SaveOrderResult> {
+  const order = await trpcClient.orders.saveOrder.mutate(input);
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    createdAt: toIsoString(order.createdAt),
+  };
+}
+
+export async function getOrder(id: string): Promise<StoredOrder | null> {
+  const order = await trpcClient.orders.getOrder.query({ id });
+  if (!order) return null;
+
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    createdAt: toIsoString(order.createdAt),
+    address: order.address,
+    subtotal: Number(order.subtotal),
+    deliveryFee: Number(order.deliveryFee),
+    total: Number(order.total),
+    customerName: order.customer.user.name ?? "Cliente",
+    slot: {
+      id: order.deliverySlot.id,
+      dayLabel: order.deliverySlot.dayLabel,
+      dateLabel: order.deliverySlot.dateLabel,
+      timeRange: order.deliverySlot.timeRange,
+      express: order.deliverySlot.express,
+    },
+    items: order.items.map((item) => ({
+      quantity: Number(item.quantity),
+      neverSubstitute: item.neverSubstitute,
+      product: {
+        id: item.product.id,
+        name: item.product.name,
+        unit: item.product.unit,
+        price: Number(item.product.price),
+        emoji: item.product.emoji,
+        gradient: item.product.gradient,
+      },
+    })),
+  };
 }

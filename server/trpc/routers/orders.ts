@@ -141,6 +141,17 @@ export const ordersRouter = router({
           subtotal: true,
           deliveryFee: true,
           total: true,
+          // Sprint 4 (PR 4): the customer-facing tracker displays who an
+          // order is for — customer.user.name, not customer itself (name
+          // lives on User, Customer has none of its own). User.name is
+          // nullable; the caller decides the fallback, not this query.
+          customer: {
+            select: {
+              user: {
+                select: { name: true },
+              },
+            },
+          },
           deliverySlot: {
             select: {
               id: true,

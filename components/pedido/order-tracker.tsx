@@ -32,7 +32,7 @@ export function OrderTracker({ order }: { order: StoredOrder }) {
     if (!announcedStages.current.has(progress.stageId)) {
       announcedStages.current.add(progress.stageId);
       toast.success(STAGE_TOASTS[progress.stageId], {
-        description: `Pedido #${order.id}`,
+        description: `Pedido #${order.orderNumber}`,
       });
     }
     if (
@@ -42,10 +42,10 @@ export function OrderTracker({ order }: { order: StoredOrder }) {
     ) {
       announcedMidRoute.current = true;
       toast.info("El repartidor está a 10 cuadras de tu casa 📍", {
-        description: `Pedido #${order.id}`,
+        description: `Pedido #${order.orderNumber}`,
       });
     }
-  }, [progress.stageId, progress.driverProgress, order.id]);
+  }, [progress.stageId, progress.driverProgress, order.orderNumber]);
 
   const currentStep = orderStatusSteps[progress.stageIndex];
   const isEnCamino = progress.stageId === "en_camino";
@@ -57,7 +57,7 @@ export function OrderTracker({ order }: { order: StoredOrder }) {
         <div>
           <p className="text-sm text-muted-foreground">Pedido</p>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-            #{order.id}
+            #{order.orderNumber}
           </h1>
         </div>
         <div
