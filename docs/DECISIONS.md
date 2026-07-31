@@ -265,3 +265,118 @@ could need to be reflected. This is accepted deliberately, consistent
 with `docs/BACKEND_ARCHITECTURE.md` §23's "Documentation First" principle;
 the alternative (under-documenting a system that will hold real payment
 and customer data) is the worse trade.
+
+---
+
+## 2026-07-31 — Sprint 3 Phase 1 seed data: placeholder values for DR-only fields absent from the mock data
+
+**Decision:** `prisma/seed.ts` implements the full Dominican Republic schema
+from day one (see the schema-scope decision below) and seeds it from
+`data/catalog.ts`, `data/delivery.ts`, `data/orders.ts`, and
+`data/admin.ts`, preserved verbatim wherever their shape already matches
+the schema. For schema fields that are required but have no equivalent
+in the current (still Argentina-themed) mock data — e.g. a product's tax
+category, an address's province/municipality — the seed script fills
+them with explicit, clearly-marked placeholder values rather than
+inventing fictional DR content or leaving the field null.
+
+**Why:** `docs/BACKEND_ARCHITECTURE.md` §19 Phase 1 calls for seeding
+"byte-identical" to today's mock data, but the mock data was written for
+an Argentina-themed demo and genuinely does not carry DR-specific fields
+the real schema needs. Redesigning the schema around the old dataset
+would mean building the wrong long-term shape; silently inventing
+realistic-looking DR content would risk that placeholder data being
+mistaken for real product/address data later. Marked placeholders keep
+the schema correct now and the gap visible and traceable.
+
+**Trade-off:** The seeded database is not yet representative of real DR
+catalog, pricing, or address data — every placeholder is commented
+in-line, pointing back to this entry. A dedicated content migration (real
+DR products, DOP pricing, real provinces/municipalities, real tax rates)
+is required before any customer-facing or production use, and is
+explicitly out of scope for Sprint 3.
+
+---
+
+## 2026-07-31 — Sprint 3 initial Prisma schema: Sprint 3/4 entities plus identity, not the full §3 entity set
+
+**Decision:** `prisma/schema.prisma`'s first version models the entities
+required to seed today's mock data (Sprint 3) and to support Sprint 4's
+planned migration (`services/orders.ts` cutover to tRPC,
+`hooks/use-order-progress.ts` replaced with real `OrderStatusEvent`
+polling) — `Branch`, `Category`, `Product`, `Brand`, `Customer`,
+`Address`, `DeliverySlot`, `Delivery`, `Driver`, `Order`, `OrderItem`,
+`OrderStatusEvent` — **plus the complete identity schema**: `User`,
+`Role`, `Account`, `Session`, `VerificationToken`. No authentication
+logic, adapters, middleware, routes, or login flows are implemented
+against these identity tables until Sprint 5 — Sprint 3 establishes the
+schema only. Payments/finance (`Payment`, `Refund`), fiscal
+(`TaxCategory`, `FiscalReceipt`), marketing (`Campaign`, `Promotion`,
+`CouponRedemption`), employees (`Employee`, `Shift`), `NotificationLog`,
+`AuditLog`, and `AIInsight` remain deferred — added in the schema
+revision for the sprint that actually implements each (Sprint 6 for
+payments/fiscal, Sprint 9+ for marketing/employees/AI).
+
+**Why:** All of these entities are already specified in
+`docs/BACKEND_ARCHITECTURE.md` §3, so nothing here contradicts the frozen
+architecture — this is a sequencing choice, not a design change. The
+identity model is included now (rather than deferred to Sprint 5 with
+the rest) specifically to avoid a second, disruptive schema migration
+once Auth.js implementation begins — the tables are small, fully
+specified, and untouched by any other Sprint 3/4 work, so including them
+adds no meaningful migration complexity. The remaining deferred groups
+(payments/fiscal, marketing, employees, notifications, audit log, AI)
+are excluded because building every model from §3 on day one would carry
+migration and review surface for tables nothing in Sprint 3 or Sprint 4
+reads or writes, several sprints before they're needed.
+
+**Trade-off:** Each later sprint that introduces a still-deferred entity
+group (Sprint 6 payments/fiscal, Sprint 9+ marketing/employees/AI) will
+need its own migration and its own schema-scope PR. The identity tables,
+by contrast, exist unused for two sprints (Sprint 3 and 4) before Sprint
+5 builds real behavior on top of them — accepted because the alternative
+(adding them only in Sprint 5) would mean Auth.js implementation and
+schema migration landing in the same sprint, a larger combined change
+than authenticating against an already-existing, already-reviewed shape.
+
+---
+
+## 2026-07-31 — Sprint 3 database provisioning: standalone Neon account, not the Vercel–Neon marketplace integration
+
+**Decision:** Provision Neon as a standalone account/project, wiring
+`DATABASE_URL` and `DIRECT_URL` into Vercel manually per environment,
+rather than using Vercel's native Neon marketplace integration.
+
+**Why:** `docs/BACKEND_ARCHITECTURE.md` §1.3 recommends Neon specifically
+for vendor independence from the hosting platform. A standalone account
+keeps the database relationship fully separate from the Vercel project,
+at the cost of one-time manual environment-variable wiring instead of
+the marketplace integration's automatic sync.
+
+**Trade-off:** Preview-branch-per-PR automation and environment variable
+propagation must be configured and verified by hand for each environment
+(development, preview, production) rather than inherited for free from
+the marketplace integration. This is accepted as a one-time setup cost in
+exchange for not coupling the database provider to the hosting provider.
+
+---
+
+## 2026-07-31 — Sprint 3 deploy target: Preview Deployments only for `production-v1`; `main` remains production
+
+**Decision:** Sprint 3 configures Vercel Preview Deployments for
+`production-v1` and all PRs opened against it. The existing production
+deployment (`morel-os.vercel.app`, deployed from `main`) is left
+untouched — it continues serving the frozen demo (`demo-v1`).
+
+**Why:** Sprint 3 lands backend infrastructure that is not yet wired to
+any component or user-visible flow (per `docs/BACKEND_ARCHITECTURE.md`
+§19 Phase 2, this is deliberate). There is no functional reason to cut
+production over before a real feature depends on it, and doing so would
+risk exposing infrastructure-in-progress (an unauthenticated Prisma-backed
+API surface, however unused) on the domain real users could reach.
+
+**Trade-off:** `production-v1`'s work stays unverified against the actual
+production domain/environment until an explicit, separate cutover
+decision is made — deferred to whichever sprint first ships something
+production needs to actually serve. Until then, verification happens via
+Preview Deployments and local development only.
