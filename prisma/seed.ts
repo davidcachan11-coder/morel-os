@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PrismaClient, type OrderStatus } from "@prisma/client";
 import { categories, products } from "@/data/catalog";
@@ -177,6 +178,10 @@ export function buildSeedData() {
   // assigned to the first seeded branch).
   const demoOrderRow = {
     orderNumber: DEMO_ORDER_NUMBER,
+    // Sprint 4's Order.idempotencyKey is required — this seed row predates
+    // saveOrder's real callers, so it generates its own. An internal dedup
+    // token, not a business fact; harmless to synthesize per row.
+    idempotencyKey: randomUUID(),
     customerId: demoCustomerId,
     branchId: branchRows[0].id,
     deliverySlotId: demoOrder.slot.id,
@@ -217,6 +222,7 @@ export function buildSeedData() {
     const createdAt = new Date(Date.now() - minutesAgo * 60_000);
     return {
       orderNumber: order.id,
+      idempotencyKey: randomUUID(),
       customerId: `customer-${slugify(order.customerName)}`,
       branchId: `branch-${slugify(order.branch)}`,
       deliverySlotId: deliverySlotRows[0].id,

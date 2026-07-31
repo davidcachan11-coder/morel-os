@@ -27,6 +27,11 @@ const saveOrderInput = z.object({
   deliverySlotId: z.string().min(1),
   address: z.string().min(1),
   items: z.array(orderItemInput).min(1).max(100),
+  // Required, client-supplied — see docs/DECISIONS.md's idempotency entry.
+  // The client is responsible for generating and persisting this across a
+  // page refresh (lib/checkout-store.ts, added alongside the real checkout
+  // UI); this procedure only enforces and honors it.
+  idempotencyKey: z.string().uuid(),
 });
 
 function normalizeEmail(email: string): string {
@@ -101,13 +106,26 @@ const ORDER_NUMBER_SEQUENCE = "order_number_seq";
  *   same property every sequence-based invoice/order numbering scheme has.
  * - Everything (customer resolution, validation, order/items/status-event
  *   creation) happens inside one transaction — no partial writes possible.
- *
- * Known, deliberately out-of-scope gap: nothing here prevents a duplicate
- * *submission* (double-click, client retry after a dropped response) from
- * creating two distinct, fully valid orders — that's a client-side
- * double-submit guard or a request-level idempotency key, a separate
- * design decision for whichever PR wires this into the real checkout UI,
- * not a transaction-atomicity concern this procedure can resolve alone.
+ * - idempotencyKey (Sprint 4) is checked first, before any other work: a
+ *   repeat submission with the same key returns the original result
+ *   unchanged rather than creating a second order. A concurrent race on
+ *   the same key is caught via the column's unique constraint (P2002) —
+ *   deliberately NOT caught inside the transaction the way the email
+ *   upsert's race is above. Once any statement inside a Postgres
+ *   transaction fails, that transaction is aborted at the session level;
+ *   every later statement on the same connection fails too, until a real
+ *   ROLLBACK happens. Prisma does not add savepoints around individual
+ *   interactive-transaction calls, so catching create()'s P2002 and then
+ *   issuing more tx.* queries wouldn't reliably run them. Instead the
+ *   error is left to propagate out of $transaction() uncaught, so Prisma
+ *   performs a real rollback — cleanly undoing the capacity decrement
+ *   below (and this losing request's own email upsert, if it was a new
+ *   customer) — and the winning order is re-fetched with a fresh query
+ *   after the transaction is gone, in the mutation's outer catch.
+ * - deliverySlot capacity (Sprint 4) is enforced via an atomic conditional
+ *   decrement (`UPDATE ... WHERE spotsLeft > 0`), not a read-then-write —
+ *   the existing slot-existence check above only confirms the slot is
+ *   real, it does not confirm capacity remains.
  */
 export const ordersRouter = router({
   getOrder: publicProcedure
@@ -166,158 +184,214 @@ export const ordersRouter = router({
       const normalizedEmail = normalizeEmail(input.customer.email);
       const normalizedPhone = normalizePhone(input.customer.phone);
 
-      return ctx.prisma.$transaction(async (tx) => {
-        // Discovered from the database, not external config — saveOrder's
-        // only responsibility here is retrieving the default branch and
-        // validating it exists. No selection/assignment logic.
-        const branch = await tx.branch.findFirst({
-          where: { isDefault: true },
-        });
-        if (!branch) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "No branch is marked as the default branch.",
+      try {
+        return await ctx.prisma.$transaction(async (tx) => {
+          // Checked first, before any other work: a repeat submission with
+          // the same key returns the original result unchanged instead of
+          // creating a second order or re-decrementing slot capacity.
+          const existingOrder = await tx.order.findUnique({
+            where: { idempotencyKey: input.idempotencyKey },
+            select: { id: true, orderNumber: true, createdAt: true },
           });
-        }
-
-        const slot = await tx.deliverySlot.findUnique({
-          where: { id: input.deliverySlotId },
-        });
-        if (!slot) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Unknown delivery slot.",
-          });
-        }
-
-        const productIds = [...new Set(input.items.map((item) => item.productId))];
-        const products = await tx.product.findMany({
-          where: { id: { in: productIds } },
-        });
-        if (products.length !== productIds.length) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "One or more products not found.",
-          });
-        }
-        const productById = new Map(products.map((p) => [p.id, p]));
-
-        // Decimal arithmetic throughout — product.price is already a
-        // Prisma.Decimal (that's how Prisma returns Decimal columns,
-        // specifically to avoid this class of bug). Converting to `number`
-        // and summing in floating point would reintroduce the exact
-        // problem Decimal columns exist to prevent, and the error compounds
-        // with cart size.
-        const subtotal = input.items.reduce(
-          (sum, item) =>
-            sum.plus(productById.get(item.productId)!.price.times(item.quantity)),
-          new Prisma.Decimal(0)
-        );
-        const deliveryFee = new Prisma.Decimal(DELIVERY_FEE);
-        const total = subtotal.plus(deliveryFee);
-
-        // Possible-duplicate signal only — never a merge decision. Only
-        // checked when email doesn't already resolve to an existing
-        // account, since email match is itself conclusive. User.phone is
-        // indexed (@@index([phone])) so this isn't a full table scan.
-        const existingByEmail = await tx.user.findUnique({
-          where: { email: normalizedEmail },
-        });
-        if (!existingByEmail) {
-          const phoneMatches = await tx.user.findMany({
-            where: { phone: normalizedPhone },
-            select: { id: true },
-          });
-          if (phoneMatches.length > 0) {
-            console.warn(
-              JSON.stringify({
-                event: "possible_duplicate_customer",
-                requestId: ctx.requestId,
-                newEmail: normalizedEmail,
-                matchedExistingUserIds: phoneMatches.map((u) => u.id),
-              })
-            );
+          if (existingOrder) {
+            return existingOrder;
           }
-        }
 
-        // Email is the only merge key. An empty `update` means an existing
-        // user's stored name/phone is never overwritten by this
-        // unauthenticated submission. If a concurrent request wins the
-        // same race on this email (P2002 on the unique constraint), that
-        // means it already committed the row — re-fetch and proceed with
-        // it rather than failing this checkout.
-        let user;
-        try {
-          user = await tx.user.upsert({
+          // Discovered from the database, not external config — saveOrder's
+          // only responsibility here is retrieving the default branch and
+          // validating it exists. No selection/assignment logic.
+          const branch = await tx.branch.findFirst({
+            where: { isDefault: true },
+          });
+          if (!branch) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "No branch is marked as the default branch.",
+            });
+          }
+
+          const slot = await tx.deliverySlot.findUnique({
+            where: { id: input.deliverySlotId },
+          });
+          if (!slot) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Unknown delivery slot.",
+            });
+          }
+
+          // Atomic conditional decrement, not read-then-write: the WHERE
+          // clause and the decrement happen in the same statement, so two
+          // concurrent requests against the last remaining spot can't both
+          // read spotsLeft=1 and both succeed. `count === 0` means the
+          // slot has no capacity left, since the existence check above
+          // already confirmed the row is real. If order.create() below
+          // fails (e.g. an idempotencyKey race), this decrement is undone
+          // by the transaction's own rollback — see the outer catch.
+          const capacityUpdate = await tx.deliverySlot.updateMany({
+            where: { id: slot.id, spotsLeft: { gt: 0 } },
+            data: { spotsLeft: { decrement: 1 } },
+          });
+          if (capacityUpdate.count === 0) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "Selected delivery slot is full.",
+            });
+          }
+
+          const productIds = [...new Set(input.items.map((item) => item.productId))];
+          const products = await tx.product.findMany({
+            where: { id: { in: productIds } },
+          });
+          if (products.length !== productIds.length) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "One or more products not found.",
+            });
+          }
+          const productById = new Map(products.map((p) => [p.id, p]));
+
+          // Decimal arithmetic throughout — product.price is already a
+          // Prisma.Decimal (that's how Prisma returns Decimal columns,
+          // specifically to avoid this class of bug). Converting to `number`
+          // and summing in floating point would reintroduce the exact
+          // problem Decimal columns exist to prevent, and the error compounds
+          // with cart size.
+          const subtotal = input.items.reduce(
+            (sum, item) =>
+              sum.plus(productById.get(item.productId)!.price.times(item.quantity)),
+            new Prisma.Decimal(0)
+          );
+          const deliveryFee = new Prisma.Decimal(DELIVERY_FEE);
+          const total = subtotal.plus(deliveryFee);
+
+          // Possible-duplicate signal only — never a merge decision. Only
+          // checked when email doesn't already resolve to an existing
+          // account, since email match is itself conclusive. User.phone is
+          // indexed (@@index([phone])) so this isn't a full table scan.
+          const existingByEmail = await tx.user.findUnique({
             where: { email: normalizedEmail },
-            create: {
-              email: normalizedEmail,
-              name: input.customer.name,
-              phone: normalizedPhone,
-              role: "CUSTOMER",
-              customer: { create: {} },
+          });
+          if (!existingByEmail) {
+            const phoneMatches = await tx.user.findMany({
+              where: { phone: normalizedPhone },
+              select: { id: true },
+            });
+            if (phoneMatches.length > 0) {
+              console.warn(
+                JSON.stringify({
+                  event: "possible_duplicate_customer",
+                  requestId: ctx.requestId,
+                  newEmail: normalizedEmail,
+                  matchedExistingUserIds: phoneMatches.map((u) => u.id),
+                })
+              );
+            }
+          }
+
+          // Email is the only merge key. An empty `update` means an existing
+          // user's stored name/phone is never overwritten by this
+          // unauthenticated submission. If a concurrent request wins the
+          // same race on this email (P2002 on the unique constraint), that
+          // means it already committed the row — re-fetch and proceed with
+          // it rather than failing this checkout.
+          let user;
+          try {
+            user = await tx.user.upsert({
+              where: { email: normalizedEmail },
+              create: {
+                email: normalizedEmail,
+                name: input.customer.name,
+                phone: normalizedPhone,
+                role: "CUSTOMER",
+                customer: { create: {} },
+              },
+              update: {},
+              include: { customer: true },
+            });
+          } catch (error) {
+            const isEmailRace =
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === "P2002" &&
+              (error.meta?.target as string[] | undefined)?.includes("email");
+            if (!isEmailRace) {
+              throw error;
+            }
+            user = await tx.user.findUniqueOrThrow({
+              where: { email: normalizedEmail },
+              include: { customer: true },
+            });
+          }
+          const customerId = user.customer!.id;
+
+          // order_number_seq is a standalone Postgres sequence (see this
+          // migration), deliberately not a Prisma field — see the header
+          // comment above and docs/DECISIONS.md's order-id entry. Embedded
+          // via Prisma.raw as trusted, hardcoded SQL text (a module-level
+          // constant, never derived from request input) rather than a bound
+          // parameter, avoiding any ambiguity in how Postgres resolves the
+          // parameter's type against nextval's regclass argument.
+          const [{ nextval }] = await tx.$queryRaw<{ nextval: bigint }[]>`
+            SELECT nextval(${Prisma.raw(`'${ORDER_NUMBER_SEQUENCE}'`)})
+          `;
+          const orderNumber = `MO-${nextval.toString().padStart(6, "0")}`;
+
+          // No try/catch here — see the header comment above for why a
+          // P2002 on idempotencyKey is deliberately left to propagate
+          // uncaught, rather than caught-and-recovered on this same tx.
+          const order = await tx.order.create({
+            data: {
+              orderNumber,
+              idempotencyKey: input.idempotencyKey,
+              customerId,
+              branchId: branch.id,
+              deliverySlotId: slot.id,
+              address: input.address,
+              subtotal,
+              deliveryFee,
+              total,
             },
-            update: {},
-            include: { customer: true },
           });
-        } catch (error) {
-          const isEmailRace =
-            error instanceof Prisma.PrismaClientKnownRequestError &&
-            error.code === "P2002" &&
-            (error.meta?.target as string[] | undefined)?.includes("email");
-          if (!isEmailRace) {
-            throw error;
-          }
-          user = await tx.user.findUniqueOrThrow({
-            where: { email: normalizedEmail },
-            include: { customer: true },
+
+          await tx.orderItem.createMany({
+            data: input.items.map((item) => ({
+              orderId: order.id,
+              productId: item.productId,
+              quantity: item.quantity,
+              neverSubstitute: item.neverSubstitute,
+            })),
           });
+
+          await tx.orderStatusEvent.create({
+            data: { orderId: order.id, status: "CONFIRMADO" },
+          });
+
+          return {
+            id: order.id,
+            orderNumber: order.orderNumber,
+            createdAt: order.createdAt,
+          };
+        });
+      } catch (error) {
+        const isIdempotencyRace =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002" &&
+          (error.meta?.target as string[] | undefined)?.includes(
+            "idempotencyKey"
+          );
+        if (!isIdempotencyRace) {
+          throw error;
         }
-        const customerId = user.customer!.id;
-
-        // order_number_seq is a standalone Postgres sequence (see this
-        // migration), deliberately not a Prisma field — see the header
-        // comment above and docs/DECISIONS.md's order-id entry. Embedded
-        // via Prisma.raw as trusted, hardcoded SQL text (a module-level
-        // constant, never derived from request input) rather than a bound
-        // parameter, avoiding any ambiguity in how Postgres resolves the
-        // parameter's type against nextval's regclass argument.
-        const [{ nextval }] = await tx.$queryRaw<{ nextval: bigint }[]>`
-          SELECT nextval(${Prisma.raw(`'${ORDER_NUMBER_SEQUENCE}'`)})
-        `;
-        const orderNumber = `MO-${nextval.toString().padStart(6, "0")}`;
-
-        const order = await tx.order.create({
-          data: {
-            orderNumber,
-            customerId,
-            branchId: branch.id,
-            deliverySlotId: slot.id,
-            address: input.address,
-            subtotal,
-            deliveryFee,
-            total,
-          },
+        // The whole transaction above — including this request's own
+        // capacity decrement, and its own email upsert if this was a new
+        // customer — was already rolled back by Postgres the moment
+        // order.create() failed; a concurrent request with the same key
+        // committed first. tx is gone, so this is a fresh query on
+        // ctx.prisma, not a continuation of the dead transaction.
+        return ctx.prisma.order.findUniqueOrThrow({
+          where: { idempotencyKey: input.idempotencyKey },
+          select: { id: true, orderNumber: true, createdAt: true },
         });
-
-        await tx.orderItem.createMany({
-          data: input.items.map((item) => ({
-            orderId: order.id,
-            productId: item.productId,
-            quantity: item.quantity,
-            neverSubstitute: item.neverSubstitute,
-          })),
-        });
-
-        await tx.orderStatusEvent.create({
-          data: { orderId: order.id, status: "CONFIRMADO" },
-        });
-
-        return {
-          id: order.id,
-          orderNumber: order.orderNumber,
-          createdAt: order.createdAt,
-        };
-      });
+      }
     }),
 });

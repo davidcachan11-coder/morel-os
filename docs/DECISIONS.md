@@ -826,3 +826,97 @@ logic beyond pure mapping — re-deriving totals, re-validating input, retry
 or caching policy — that's a signal to stop and flag it for review rather
 than let the adapter grow into a second domain layer. `ordersRouter`
 remains the single place business rules live.
+
+---
+
+## 2026-07-31 — `saveOrder` idempotency and delivery-slot capacity are now implemented (supersedes #19/#20's "deferred" framing)
+
+**Decision:** The two gaps recorded above as deliberately deferred to
+Sprint 4 — request idempotency and delivery-slot capacity enforcement —
+are now implemented in `ordersRouter.saveOrder`, in the same PR since
+both touch the same transaction:
+
+- **Idempotency:** `saveOrderInput` gains a required `idempotencyKey`
+  (`z.string().uuid()`); `Order` gains a required, unique
+  `idempotencyKey` column. `prisma/seed.ts`'s 20 rows predate this
+  procedure and never had a real client request behind them, so the
+  seed script generates its own key per row (`node:crypto`'s
+  `randomUUID()`) — an internal dedup token, not a business fact, so
+  synthesizing one for seed data doesn't fabricate anything meaningful
+  (no different in kind from the `cuid()` ids already synthesized for
+  every seeded row). The migration backfills any pre-existing NULL rows
+  with `gen_random_uuid()` before adding the `NOT NULL` constraint, so
+  it applies safely regardless of whether the target database is a
+  fresh, empty preview branch or already has seeded data. The
+  transaction checks this key first, before any other work, and returns
+  the original result unchanged on a repeat. A concurrent race on the
+  same key is caught via the column's own unique constraint (P2002) —
+  but deliberately *not* inside the transaction the way the email-upsert
+  race above is. Once any statement inside a Postgres transaction fails,
+  Postgres aborts that transaction at the session level; every later
+  statement on the same connection fails too until a real `ROLLBACK`
+  happens, and Prisma does not add savepoints around individual
+  interactive-transaction calls to shield application code from this.
+  So `order.create()`'s error is left to propagate out of
+  `$transaction()` uncaught: Prisma performs a real rollback, which
+  cleanly undoes the capacity decrement below (and this losing request's
+  own email upsert, if it was a new customer) with no manual
+  compensation needed, and the winning order is re-fetched with a fresh
+  query (on `ctx.prisma`, not the now-dead `tx`) in the mutation's outer
+  `catch`.
+- **Capacity:** `saveOrder` now performs an atomic conditional decrement
+  (`deliverySlot.updateMany` with `spotsLeft: { gt: 0 }`) immediately
+  after the existing slot-existence check, throwing `CONFLICT` if the
+  affected-row count is 0. This runs *after* the idempotency
+  short-circuit, so a retried request never double-decrements.
+
+**Why implemented together:** Both were deferred in the same two entries
+above for the same reason (no real client existed to need them until
+Sprint 4's checkout wiring), and both modify the same transaction in
+`saveOrder` — reviewing them as one change is more coherent than two
+PRs each partially editing the same function.
+
+**Scope note:** Sprint 3's baseline — branch discovery, slot-existence
+check, product lookup/Decimal math, the `order_number_seq` fetch,
+`orderItem`/`orderStatusEvent` creation, and `getOrder` in its entirety —
+is unchanged by this entry. No architectural decision from Sprint 3 was
+revisited; this only adds the two features both #19 and #20 already
+scoped for this exact sprint.
+
+**Investigated, not fixed, in this entry:** Sprint 3's email-upsert race
+handling (`tx.user.upsert` → catch P2002 → `tx.user.findUniqueOrThrow`
+on the same `tx`) was suspected of having the same transaction-abort
+issue reasoned through above, so it was empirically tested — a minimal
+SQLite-backed Prisma project reproducing the exact `User`/`Customer`
+nested-write shape, with query logging, both inside and outside an
+interactive transaction. Findings:
+
+- A plain `upsert()` with no nested write never throws for this race at
+  all — it's resolved atomically at the database level and silently
+  returns the existing row.
+- `upsert()` *with* a nested write (`customer: { create: {} }`, exactly
+  `saveOrder`'s shape) throws `Invalid \`prisma.user.create()\`
+  invocation` on conflict — confirming Prisma implements this as an
+  internal `create()` attempt, not a native atomic upsert, so the P2002
+  is real, not dead code.
+- That error did **not** reach the surrounding `try/catch` at all —
+  reproduced identically both inside and outside a transaction, which
+  rules out transaction-abort semantics as the cause (a non-transactional
+  call has no ambient transaction to poison, yet the error still escaped
+  the same way).
+
+So this is a *different* mechanism than the one fixed above — something
+in how this Prisma client version (6.19.3) dispatches errors from a
+nested-write upsert's conflicting create-branch, not a Postgres
+transaction-state issue. **Unverified on PostgreSQL** — SQLite and
+Postgres have different transaction semantics, and this was only
+reproduced against the former; no live Postgres connection was available
+to confirm it generalizes. The fix that resolved the `order.create()`
+case (catch outside the transaction) does not obviously apply here
+either, since the symptom is the error skipping `try/catch` entirely,
+not surviving inside a poisoned transaction — the correct fix, if this
+does reproduce on Postgres, is not yet known (candidates include
+restructuring the upsert to avoid the nested write, e.g. separate
+`user.create()` + `customer.create()` calls). Deliberately left
+un-fixed and out of this PR's scope: recorded here as a follow-up
+investigation, not folded into Sprint 4's idempotency/capacity work.

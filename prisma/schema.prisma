@@ -259,6 +259,14 @@ model Order {
   // than just procedurally discouraged.
   orderNumber String @unique
 
+  // Client-supplied request-idempotency key (Sprint 4 — see
+  // docs/DECISIONS.md's idempotency entry). Required, not nullable:
+  // prisma/seed.ts generates its own key per seeded row (an internal
+  // dedup token, not a business fact — no different in kind from the
+  // cuid() ids already synthesized for every seeded row) so every Order
+  // row genuinely has one, real or seeded.
+  idempotencyKey String @unique
+
   customerId     String
   branchId       String
   deliverySlotId String
