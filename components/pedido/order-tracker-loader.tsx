@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { OrderTracker } from "@/components/pedido/order-tracker";
-import { getOrder, type StoredOrder } from "@/lib/orders";
-import { buildDemoOrder } from "@/lib/mock-data";
+import { getOrder, type StoredOrder } from "@/services/orders";
+import { buildDemoOrder } from "@/data/orders";
 
 export function OrderTrackerLoader({ orderId }: { orderId: string }) {
   const [order, setOrder] = useState<StoredOrder | null>(null);

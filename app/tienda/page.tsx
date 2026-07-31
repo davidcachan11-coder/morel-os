@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
-import { categories, products, type CategoryId } from "@/lib/mock-data";
+import { categories, products, type CategoryId } from "@/data/catalog";
 import { ProductCard } from "@/components/tienda/product-card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";

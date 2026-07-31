@@ -5,17 +5,15 @@ import { toast } from "sonner";
 import { Phone, Star, Truck, MapPin, Clock, PackageCheck } from "lucide-react";
 import { OrderTimeline } from "@/components/pedido/order-timeline";
 import { LiveMap } from "@/components/pedido/live-map";
-import { useOrderProgress } from "@/lib/use-order-progress";
+import { useOrderProgress } from "@/hooks/use-order-progress";
 import {
-  formatCurrency,
-  formatQuantity,
   mockDriver,
   orderStatusSteps,
   type OrderStatusId,
-} from "@/lib/mock-data";
-import { type StoredOrder } from "@/lib/orders";
+} from "@/data/orders";
+import { type StoredOrder } from "@/services/orders";
 import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
 
 const STAGE_TOASTS: Record<OrderStatusId, string> = {
   confirmado: "Pedido confirmado — ¡gracias por tu compra! ✅",

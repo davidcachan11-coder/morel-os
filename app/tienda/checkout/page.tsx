@@ -25,10 +25,11 @@ import {
   cartSubtotal,
   type CartLine,
 } from "@/lib/cart-store";
-import { deliverySlots, formatCurrency, formatQuantity } from "@/lib/mock-data";
-import { CheckoutSummary, DELIVERY_FEE } from "@/components/tienda/checkout-summary";
-import { generateOrderId, saveOrder, type StoredOrder } from "@/lib/orders";
-import { cn } from "@/lib/utils";
+import { deliverySlots } from "@/data/delivery";
+import { CheckoutSummary } from "@/components/tienda/checkout-summary";
+import { DELIVERY_FEE } from "@/constants/pricing";
+import { generateOrderId, saveOrder, type StoredOrder } from "@/services/orders";
+import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
 
 const steps = ["Sustituciones", "Entrega", "Pago", "Confirmación"];
 

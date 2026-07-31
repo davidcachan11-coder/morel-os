@@ -2,10 +2,10 @@
 
 import { Minus, Plus, ShoppingCart, Star } from "lucide-react";
 import { motion } from "framer-motion";
-import { type Product, formatCurrency, formatQuantity } from "@/lib/mock-data";
+import { type Product } from "@/data/catalog";
 import { useCartStore } from "@/lib/cart-store";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
 
 export function ProductCard({ product }: { product: Product }) {
   const line = useCartStore((s) => s.lines[product.id]);

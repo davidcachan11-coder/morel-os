@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { CheckCircle2, MapPin, Truck, Search } from "lucide-react";
-import { products } from "@/lib/mock-data";
+import { products } from "@/data/catalog";
 
 const previewProducts = products.slice(0, 4);
 

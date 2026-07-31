@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { Check, Loader2 } from "lucide-react";
-import { orderStatusSteps } from "@/lib/mock-data";
+import { orderStatusSteps } from "@/data/orders";
 import { cn } from "@/lib/utils";
 
 export function OrderTimeline({ stageIndex }: { stageIndex: number }) {

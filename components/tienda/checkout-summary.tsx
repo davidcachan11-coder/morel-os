@@ -1,7 +1,7 @@
 import { type CartLine, cartSubtotal } from "@/lib/cart-store";
-import { formatCurrency, formatQuantity, type DeliverySlot } from "@/lib/mock-data";
-
-const DELIVERY_FEE = 1990;
+import { type DeliverySlot } from "@/data/delivery";
+import { formatCurrency, formatQuantity } from "@/lib/utils";
+import { DELIVERY_FEE } from "@/constants/pricing";
 
 export function CheckoutSummary({
   lines,
@@ -64,5 +64,3 @@ export function CheckoutSummary({
     </div>
   );
 }
-
-export { DELIVERY_FEE };

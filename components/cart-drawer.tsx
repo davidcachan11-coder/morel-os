@@ -17,8 +17,7 @@ import {
   cartLinesArray,
   cartSubtotal,
 } from "@/lib/cart-store";
-import { formatCurrency, formatQuantity } from "@/lib/mock-data";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
 
 export function CartDrawer() {
   const isOpen = useCartStore((s) => s.isDrawerOpen);

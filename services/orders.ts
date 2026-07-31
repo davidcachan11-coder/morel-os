@@ -1,7 +1,8 @@
 "use client";
 
 import { type CartLine } from "@/lib/cart-store";
-import { type DeliverySlot } from "@/lib/mock-data";
+import { type DeliverySlot } from "@/data/delivery";
+import { STORAGE_KEYS } from "@/constants/storage";
 
 export interface StoredOrder {
   id: string;
@@ -15,12 +16,10 @@ export interface StoredOrder {
   customerName: string;
 }
 
-const STORAGE_KEY = "morel-os:orders";
-
 function readAll(): Record<string, StoredOrder> {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEYS.orders);
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
@@ -31,7 +30,7 @@ export function saveOrder(order: StoredOrder) {
   if (typeof window === "undefined") return;
   const all = readAll();
   all[order.id] = order;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+  window.localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify(all));
 }
 
 export function getOrder(id: string): StoredOrder | null {

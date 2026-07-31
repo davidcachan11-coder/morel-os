@@ -10,7 +10,8 @@ import {
   CartesianGrid,
   Tooltip,
 } from "recharts";
-import { weeklySales, formatCurrency } from "@/lib/mock-data";
+import { weeklySales } from "@/data/admin";
+import { formatCurrency } from "@/lib/utils";
 
 export function SalesChart() {
   return (

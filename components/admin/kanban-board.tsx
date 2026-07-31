@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { adminOrders, formatCurrency, orderStatusSteps, type OrderStatusId } from "@/lib/mock-data";
-import { cn } from "@/lib/utils";
+import { adminOrders } from "@/data/admin";
+import { orderStatusSteps, type OrderStatusId } from "@/data/orders";
+import { cn, formatCurrency } from "@/lib/utils";
 
 const columnAccent: Record<OrderStatusId, string> = {
   confirmado: "border-t-brand-navy",

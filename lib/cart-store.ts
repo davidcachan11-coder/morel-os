@@ -2,7 +2,8 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { type Product } from "@/lib/mock-data";
+import { type Product } from "@/data/catalog";
+import { STORAGE_KEYS } from "@/constants/storage";
 
 export interface CartLine {
   product: Product;
@@ -84,7 +85,7 @@ export const useCartStore = create<CartState>()(
   clearCart: () => set({ lines: {}, selectedSlotId: null }),
     }),
     {
-      name: "morel-os:cart",
+      name: STORAGE_KEYS.cart,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ lines: state.lines, selectedSlotId: state.selectedSlotId }),
     }

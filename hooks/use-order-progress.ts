@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { type OrderStatusId } from "@/lib/mock-data";
+import { type OrderStatusId } from "@/data/orders";
 
 interface Stage {
   id: OrderStatusId;
