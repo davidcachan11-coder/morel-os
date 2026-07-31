@@ -1,11 +1,14 @@
 import { router } from "@/server/trpc/trpc";
+import { catalogRouter } from "@/server/trpc/routers/catalog";
 
 /**
- * Intentionally empty. Domain routers (server/trpc/routers/*.ts, per
- * docs/BACKEND_ARCHITECTURE.md's folder structure) land in PR 5+. This
- * file exists now only so app/api/trpc/[trpc]/route.ts has a router
- * instance to serve — it is not itself a router with any procedures.
+ * Merges domain routers (server/trpc/routers/*.ts, per
+ * docs/BACKEND_ARCHITECTURE.md's folder structure) as they land. Only
+ * catalogRouter exists so far (PR 5, read-only) — orders/inventory/
+ * customers/etc. follow in later PRs.
  */
-export const appRouter = router({});
+export const appRouter = router({
+  catalog: catalogRouter,
+});
 
 export type AppRouter = typeof appRouter;
