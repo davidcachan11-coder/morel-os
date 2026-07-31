@@ -40,57 +40,75 @@ Folder architecture (`config/`, `constants/`, `data/`, `hooks/`,
 `providers/`, `services/`, `types/`), domain-split mock data, zero
 functional change.
 
-### Sprint 1.5 — Project Documentation & Standards ✅ Complete (this sprint)
-`docs/`, `PRODUCT_VISION.md`, `CONTRIBUTING.md`, `CHANGELOG.md` — this
-document is part of it.
+### Sprint 1.5 — Project Documentation & Standards ✅ Complete
+`docs/`, `PRODUCT_VISION.md`, `CONTRIBUTING.md`, `CHANGELOG.md`.
 
-### Sprint 2 — Data Layer & Service Boundaries (Planned)
-- Introduce a shared repository-style interface behind both
-  `lib/cart-store.ts`'s persistence and `services/orders.ts`, resolving the
-  two-different-patterns duplication flagged in `docs/DECISIONS.md`.
-- Centralize the remaining hardcoded values noted in the pre-Sprint-1 audit
-  (demo customer name, demo address) that weren't in scope for Sprint 1.
+### Sprint 2 — Backend Architecture & Data Model Design ✅ Complete
+Comprehensive backend architecture designed (not implemented): technology
+stack (tRPC + PostgreSQL/Neon + Prisma + Auth.js + Inngest + Upstash +
+Azul/CardNet + Twilio WhatsApp), re-scoped to the Dominican Republic as
+the target market, complete entity model and Prisma schema sketch, and a
+7-phase migration strategy. Includes three permanent standards documents
+(`docs/SECURITY_ARCHITECTURE.md`, `docs/INFRASTRUCTURE_ARCHITECTURE.md`,
+`docs/ENGINEERING_STANDARDS.md`), independently reviewed and refined
+before approval. See `docs/BACKEND_ARCHITECTURE.md` for the full design.
 
-### Sprint 3 — Authentication & Access Control (Planned)
-- Real user accounts/sessions.
-- Gate `/admin` behind auth — currently fully public, flagged as the
-  single highest-priority security gap.
-- Introduce the first entry in `providers/` (an auth/session provider).
+### Sprint 3 — Backend Foundation Implementation (Next)
+Implements `docs/BACKEND_ARCHITECTURE.md` §19 Phase 0–2: stand up CI
+(build/lint/audit gates, CI-gated `prisma migrate deploy` — a
+prerequisite for every other implementation sprint below, not a
+parallel-track item), provision the Postgres database and seed it from
+`data/*.ts` (byte-identical to today's mock catalog/demo data), and stand
+up the tRPC layer mirroring `services/`'s function shapes — built
+alongside the existing `localStorage` implementation, not yet wired to
+any component.
 
-### Sprint 4 — Real Backend Integration (Planned)
-- Introduce `app/api/` (or an external API) backing at least the order
-  flow first (highest business value, already has a clean `services/`
-  seam to swap).
-- Replace `hooks/use-order-progress.ts`'s wall-clock simulation with real
-  server-pushed status (polling or WebSocket).
-- Migrate the product catalog from static `data/catalog.ts` to a real,
-  queryable source once inventory needs to change without a redeploy.
+### Sprint 4 — Service Layer Cutover & Live Order Status (Planned)
+Phase 3–4: resolve the `lib/cart-store.ts`/`services/orders.ts`
+persistence-pattern duplication flagged in `docs/DECISIONS.md` (a
+prerequisite, per `docs/BACKEND_ARCHITECTURE.md` §19's own note — not
+optional), swap `services/orders.ts`'s implementation to call the real
+backend without changing its exported signatures, then replace
+`hooks/use-order-progress.ts`'s wall-clock simulation with a subscription
+to real `OrderStatusEvent` data (polling to start).
 
-### Sprint 5 — Payments (Planned)
-- Replace the cosmetic checkout payment step with a real, PCI-compliant
-  provider (Stripe, MercadoPago, or equivalent). No raw card data should
-  ever be handled directly by this app's own code.
+### Sprint 5 — Authentication, MFA & Admin Gating (Planned)
+Phase 5: real user accounts/sessions via Auth.js, the bootstrap-admin
+path (`docs/BACKEND_ARCHITECTURE.md` §6), MFA enforcement for
+`finance`/`ops_manager`/`admin` (`docs/SECURITY_ARCHITECTURE.md` §4.2),
+and gating `/admin` behind the role checks in §7 — currently fully
+public, the single highest-priority security gap. Introduces the first
+entry in `providers/`.
 
-### Sprint 6 — Testing & CI (Planned)
-- Unit tests for the pure logic that's cheapest to test now:
-  `lib/cart-store.ts`'s reducers, `hooks/use-order-progress.ts`'s status
-  derivation.
-- GitHub Actions (or equivalent) running `build` + `lint` (+ tests once
-  they exist) on every push/PR to `production-v1`.
+### Sprint 6 — Payments & Fiscal Compliance (Planned)
+Phase 6: hosted/tokenized checkout via Azul (primary) and CardNet
+(secondary/failover), Cash on Delivery as a supported method with a
+capped order value, and `FiscalReceipt`/`TaxCategory` (ITBIS) — these
+ship together, not sequentially, per `docs/BACKEND_ARCHITECTURE.md` §19.
+No raw card data is ever handled directly by this app's own code.
 
-### Sprint 7 — Hardening (Planned)
-- Security headers (CSP, `X-Frame-Options`, `Referrer-Policy`) in
-  `next.config.ts`.
-- Accessibility pass on the checkout wizard (real `<form>`, `autoComplete`
-  hints, ARIA single-select semantics for slot/category pickers).
-- Adopt the previously-scaffolded `config/brand.ts`, `theme.ts`,
-  `navigation.ts`, `seo.ts` into the components that currently hardcode
-  the same values.
+### Sprint 7 — Testing & CI Hardening (Planned)
+Unit tests for the pure logic that's cheapest to test now:
+`lib/cart-store.ts`'s reducers and the Phase-4 order-status logic, plus —
+given their regulatory sensitivity — ITBIS/NCF computation
+(`docs/ENGINEERING_STANDARDS.md` §8). Integration tests for tRPC routers
+against a real test-database branch. (The CI pipeline itself is a Sprint
+3 prerequisite, not part of this sprint — this sprint is about what runs
+inside it.)
 
-### Sprint 8+ — Dashboard Suite Build-Out (Planned)
-Build out the remaining modules specified in `docs/DASHBOARD_SPEC.md`
-(Executive, Inventory, Customers, Marketing, Finance, Employees), one at a
-time, each depending on the real backend work above for real data.
+### Sprint 8 — Hardening (Planned)
+Security headers (CSP, `X-Frame-Options`, `Referrer-Policy`) in
+`next.config.ts` per `docs/SECURITY_ARCHITECTURE.md` §6.4. Accessibility
+pass on the checkout wizard (real `<form>`, `autoComplete` hints, ARIA
+single-select semantics for slot/category pickers). Adopt the
+previously-scaffolded `config/brand.ts`, `theme.ts`, `navigation.ts`,
+`seo.ts` into the components that currently hardcode the same values.
+
+### Sprint 9+ — Dashboard Suite Build-Out (Planned)
+Phase 7: build out the remaining modules specified in
+`docs/DASHBOARD_SPEC.md` (Executive, Inventory, Customers, Marketing,
+Finance, Employees), one at a time, each depending on the real backend
+work above for real data.
 
 ---
 

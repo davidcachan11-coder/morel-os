@@ -189,3 +189,79 @@ alone.
 
 **Trade-off:** None — this sprint intentionally touches zero application
 code.
+
+---
+
+## 2026-07-31 — Sprint 2: backend architecture designed, re-scoped to the Dominican Republic
+
+**Decision:** Design (not implement) the full backend: tRPC + Next.js
+Route Handlers, PostgreSQL on Neon, Prisma, Auth.js, Inngest, Upstash
+Redis, Vercel Blob → Cloudflare R2, Sentry — recorded in
+`docs/BACKEND_ARCHITECTURE.md`, with every major choice carrying a full
+problem/options/advantages/disadvantages/security/scalability/cost/
+lock-in/migration-difficulty/"if this is wrong" analysis, not just a
+recommendation. Mid-sprint, the target market was explicitly re-scoped
+from the Argentina/LatAm assumptions baked into the demo
+(`PRODUCT_VISION.md`, `data/*.ts`) to the **Dominican Republic** —
+replacing Mercado Pago/Stripe with Azul (primary) + CardNet (secondary)
++ Cash on Delivery, ARS with DOP, adding DGII/ITBIS fiscal-receipt
+modeling, restructuring the address model around DR's
+province/municipality/landmark-based reality, and making WhatsApp
+(not SMS) the primary notification channel.
+
+**Why:** A backend of this scope — real money, real customer PII, real
+regulatory (fiscal) requirements — needed every major decision reasoned
+through and recorded *before* implementation, not discovered mid-build.
+The market re-scope happened because the backend is what will actually
+process real transactions for a real business, and Stripe does not
+support Dominican Republic–domiciled merchant accounts while Mercado
+Pago has no meaningful DR presence — continuing to design against
+Argentina's payment landscape would have produced an architecture that
+couldn't actually be implemented for its real target market.
+
+**Trade-off:** `PRODUCT_VISION.md`, `docs/DASHBOARD_SPEC.md`, and the
+current mock data (`data/*.ts`) still describe the Argentine demo and were
+**not** updated to match — `docs/BACKEND_ARCHITECTURE.md` flags this
+mismatch explicitly rather than silently carrying it. It must be
+reconciled (either update the product docs to the DR, or keep the
+backend's *patterns* market-agnostic while only its market-specific
+sections are DR-specific) before real implementation reaches the
+customer-facing product surface, though it does not block backend
+foundation work (Sprint 3).
+
+---
+
+## 2026-07-31 — Sprint 2: permanent engineering standards established, independently reviewed
+
+**Decision:** Alongside the backend design, create three permanent,
+binding standards documents — `docs/SECURITY_ARCHITECTURE.md`,
+`docs/INFRASTRUCTURE_ARCHITECTURE.md`, `docs/ENGINEERING_STANDARDS.md` —
+distinct from `docs/BACKEND_ARCHITECTURE.md`'s design-analysis style:
+these use MUST/SHOULD language and are meant to outlive any individual
+technology choice in the backend design. The full four-document set was
+then subjected to an independent architecture review (internal
+consistency, completeness, security, infrastructure, standards
+enforceability, implementation readiness) before being treated as
+approved.
+
+**Why:** A one-time design document answers "what did we decide and why."
+A standing standard answers "what must every future change continue to
+satisfy" — these are different documents with different lifetimes, and
+conflating them would mean either the design rationale gets diluted by
+prescriptive rules, or the binding rules get lost inside a much longer
+analytical document. The independent review pass existed specifically to
+catch the kind of drift/gap that's easy to introduce when four documents
+are written across several sessions — it found and the team fixed four
+High-severity issues (two broken internal cross-references, a
+same-content duplication risk between `docs/BACKEND_ARCHITECTURE.md` §16
+and `docs/SECURITY_ARCHITECTURE.md`, a missing CI-before-Phase-1
+sequencing requirement, and an undefined first-admin bootstrap mechanism)
+before approval.
+
+**Trade-off:** Four architecture/standards documents (plus this file,
+`docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/PROJECT_STATUS.md`) is a
+real maintenance surface — every future decision now has more places it
+could need to be reflected. This is accepted deliberately, consistent
+with `docs/BACKEND_ARCHITECTURE.md` §23's "Documentation First" principle;
+the alternative (under-documenting a system that will hold real payment
+and customer data) is the worse trade.

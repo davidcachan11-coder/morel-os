@@ -11,7 +11,10 @@ matters more than any individual preference, including the ones below.
 - **TypeScript, strict, no `any`.** `tsconfig.json` has `strict: true`.
   Every domain concept gets a named, exported `interface`/`type` (see
   `data/*.ts` for the pattern). If you're reaching for `any`, you're
-  probably missing a type, not avoiding one.
+  probably missing a type, not avoiding one. See
+  `docs/ENGINEERING_STANDARDS.md` §3 for the full type-safety standard
+  (Zod-at-boundaries, `interface` vs. `type` usage) — this bullet is the
+  quick version.
 - **Components are functions, not classes.** Standard React function
   components throughout; no class components exist in this codebase.
 - **Server Components by default, `"use client"` only when needed.** A
@@ -119,7 +122,7 @@ Every PR should include:
    shared state (`lib/cart-store.ts`), persistence (`services/orders.ts`),
    or the order-tracking timer (`hooks/use-order-progress.ts`). Screenshots
    or a short description of the flow walked through is enough; this
-   codebase has no automated UI tests yet (see `docs/ROADMAP.md` Sprint 6),
+   codebase has no automated UI tests yet (see `docs/ROADMAP.md` Sprint 7),
    so manual verification is the only safety net until then.
 4. **Scope discipline** — a PR should do one thing. If you notice
    something unrelated that needs fixing while working, note it (in the PR

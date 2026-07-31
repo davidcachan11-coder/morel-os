@@ -67,7 +67,7 @@ coordinators.
 
 **Depends on:** Real order data + auth (this is the first dashboard that
 should get access control, given it already exists and is currently
-public — see `docs/ROADMAP.md` Sprint 3).
+public — see `docs/ROADMAP.md` Sprint 5).
 
 ---
 
@@ -115,7 +115,7 @@ view.
 - Support/complaint tracking (none exists today — no support channel is
   modeled anywhere in the current app)
 
-**Depends on:** Real user accounts (Sprint 3) — there is currently no
+**Depends on:** Real user accounts (Sprint 5) — there is currently no
 concept of a returning customer; every checkout uses a single hardcoded
 demo name.
 
@@ -136,7 +136,7 @@ tooling.
 - Channel attribution for new customers
 - Campaign-linked order tracking
 
-**Depends on:** Customer accounts (Sprint 3) and a real order source
+**Depends on:** Customer accounts (Sprint 5) and a real order source
 (Sprint 4) at minimum; likely the module with the largest gap between spec
 and current app capability.
 
@@ -153,13 +153,13 @@ reconciliation, refunds, payment-provider fees, per-branch P&L inputs.
 
 **Planned widgets:**
 - Revenue reconciliation against the real payment provider (depends
-  entirely on Sprint 5's real payments integration — nothing here is
+  entirely on Sprint 6's real payments integration — nothing here is
   possible while checkout is cosmetic)
 - Refund/cancellation tracking
 - Delivery-fee revenue vs. delivery cost (once real driver/logistics cost
   data exists)
 
-**Depends on:** Real payments (Sprint 5) — this module cannot meaningfully
+**Depends on:** Real payments (Sprint 6) — this module cannot meaningfully
 start before that.
 
 ---

@@ -185,6 +185,14 @@ Two related but distinct layers, introduced in Sprint 1:
 
 ## 8. Future Architecture Vision
 
+**This section's direction is now the approved design in
+`docs/BACKEND_ARCHITECTURE.md`** — that document is authoritative for
+specifics (e.g., the API layer is tRPC + Route Handlers under a new
+`server/` folder, not a generic "BFF layer"; the migration is phased in
+`docs/BACKEND_ARCHITECTURE.md` §19). The predictions below predate that
+design and remain directionally correct; where the two differ on detail,
+`docs/BACKEND_ARCHITECTURE.md` wins.
+
 The current architecture is deliberately shaped like the "front half" of a
 real system — types, boundaries, and folder structure are already where
 they'd need to be — with the "back half" (persistence authority, auth,
