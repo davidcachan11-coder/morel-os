@@ -14,8 +14,8 @@ export interface AdminOrder {
   branch: string;
 }
 
-const branches = ["Sucursal Centro", "Sucursal Norte", "Sucursal Yerba Buena"];
-const customerNames = [
+export const branches = ["Sucursal Centro", "Sucursal Norte", "Sucursal Yerba Buena"];
+export const customerNames = [
   "Camila Ferreyra", "Martín Ávila", "Lucía Romero", "Facundo Paz", "Sofía Molina",
   "Ignacio Herrera", "Valentina Ríos", "Bruno Acosta", "Julieta Correa", "Tomás Ledesma",
   "Agustina Juárez", "Nicolás Ibáñez", "Milagros Sosa", "Emiliano Torres", "Abril Cabrera",
