@@ -189,6 +189,29 @@ export const ordersRouter = router({
       });
     }),
 
+  // Dedicated, lightweight polling target for the live order tracker
+  // (Sprint 4 PR 5) — deliberately not a re-use of getOrder's full select.
+  // The tracker polls every few seconds for the lifetime of an open
+  // tracking tab (up to hours); items/product/customer/slot data never
+  // changes after order creation, so re-fetching all of it on every poll
+  // would be pure waste. Only statusEvents can actually change.
+  getOrderStatus: publicProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(({ ctx, input }) => {
+      return ctx.prisma.order.findUnique({
+        where: { id: input.id },
+        select: {
+          statusEvents: {
+            orderBy: { createdAt: "asc" },
+            select: {
+              status: true,
+              createdAt: true,
+            },
+          },
+        },
+      });
+    }),
+
   saveOrder: publicProcedure
     .input(saveOrderInput)
     .mutation(async ({ ctx, input }) => {

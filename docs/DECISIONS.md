@@ -920,3 +920,61 @@ restructuring the upsert to avoid the nested write, e.g. separate
 `user.create()` + `customer.create()` calls). Deliberately left
 un-fixed and out of this PR's scope: recorded here as a follow-up
 investigation, not folded into Sprint 4's idempotency/capacity work.
+
+---
+
+## 2026-07-31 — Sprint 4 PR 5: live order-status polling, symbolic ETA/driver-progress, dedicated lean poll endpoint
+
+**Decision:** `hooks/use-order-progress.ts`'s wall-clock simulation is
+replaced with polling against real `OrderStatusEvent` rows, via a new,
+dedicated `ordersRouter.getOrderStatus` procedure (not a reuse of
+`getOrder`'s full query — see its own comment) on a 5-second interval,
+implemented as a self-scheduling `setTimeout` chain (not `setInterval`)
+so a slow response can't cause overlapping in-flight requests. The hook
+is seeded with `StoredOrder.statusEvents` (already fetched once by
+`OrderTrackerLoader`'s initial `getOrder` call) so the first render
+already shows the correct stage — no duplicate immediate fetch, no
+loading flash. Polling stops entirely once the latest event is
+`ENTREGADO`, since nothing changes after delivery.
+
+Two fields (`etaMinutes`, `driverProgress`) had no real backing data to
+derive from — no live GPS/location exists (see `prisma/schema.prisma`'s
+`Delivery` model comment), and no ETA source exists either. Rather than
+either fabricate false precision (a ticking countdown, a continuously
+"measured" position) or remove these UI elements (degrading the
+experience), both became explicitly symbolic:
+- `etaLabel`: a static, per-stage string ("15–20 min aprox." while
+  `en_camino`), never recomputed from elapsed time — approximate, not a
+  countdown.
+- `driverProgress`: nudged forward a small fixed amount
+  (`EN_CAMINO_STEP = 0.08`) on each successful poll while `en_camino`,
+  capped below 1 (`EN_CAMINO_CAP = 0.92`) so it never visually "arrives"
+  before the real `ENTREGADO` event says so, jumping to `1` immediately
+  once it does. This keeps the map/driver UI feeling alive without
+  claiming a measurement that doesn't exist — explicitly intended to be
+  replaced by real tracking once driver dispatch/GPS lands in a later
+  sprint, not extended further in the meantime.
+
+**Why:** Removing the ETA/map entirely was considered and rejected —
+noticeably degrades the tracking experience for no real gain, since the
+underlying *status* (the actual point of this PR) is now fully real.
+Keeping the old fabricated countdown/continuous-progress math was also
+rejected — directly contradicts `docs/BACKEND_ARCHITECTURE.md` Phase 4's
+"replacement, not extension" framing for the exact data this PR touches.
+A poll-tick-driven symbolic value threads between both: honest (never
+claims a precision that doesn't exist) and still visually alive.
+
+**Scope note:** `mockDriver`/`data/orders.ts`'s driver info card is
+unchanged — no real `Delivery`/`Driver` assignment exists anywhere in
+this codebase yet (confirmed: nothing creates a `Delivery` row), so
+that remains a separate, already-out-of-scope concern for a later
+sprint, not something this PR's polling replacement touches.
+
+**Known, accepted consequence — not a bug:** because `driverProgress` is
+poll-tick-driven rather than elapsed-time-driven, reopening a tracking
+link for an order that has been `en_camino` for a while shows the
+symbolic progress restarting near its initial value each time, rather
+than reflecting how long ago the real event actually happened. This is
+inherent to a deliberately non-measuring, decorative value — the
+alternative (deriving it from real elapsed time) would reintroduce the
+exact fabricated-precision problem this design avoids.

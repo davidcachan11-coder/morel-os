@@ -1,6 +1,33 @@
 "use client";
 
 import { trpcClient } from "@/lib/trpc-client";
+import { type OrderStatusId } from "@/data/orders";
+
+export interface StoredOrderStatusEvent {
+  status: OrderStatusId;
+  createdAt: string;
+}
+
+// The server's OrderStatus enum values (Prisma) — mapped here, not
+// imported from @prisma/client, so this client-side module stays
+// decoupled from Prisma's types (matching the rest of this file: no
+// Prisma imports anywhere else either).
+function mapOrderStatus(status: string): OrderStatusId {
+  switch (status) {
+    case "CONFIRMADO":
+      return "confirmado";
+    case "PREPARANDO":
+      return "preparando";
+    case "CONTROL_CALIDAD":
+      return "control_calidad";
+    case "EN_CAMINO":
+      return "en_camino";
+    case "ENTREGADO":
+      return "entregado";
+    default:
+      return "confirmado";
+  }
+}
 
 export interface StoredOrderSlot {
   id: string;
@@ -34,6 +61,7 @@ export interface StoredOrder {
   address: string;
   slot: StoredOrderSlot;
   customerName: string;
+  statusEvents: StoredOrderStatusEvent[];
 }
 
 export interface SaveOrderInput {
@@ -103,6 +131,27 @@ export async function getOrder(id: string): Promise<StoredOrder | null> {
         emoji: item.product.emoji,
         gradient: item.product.gradient,
       },
+    })),
+    statusEvents: order.statusEvents.map((event) => ({
+      status: mapOrderStatus(event.status),
+      createdAt: toIsoString(event.createdAt),
+    })),
+  };
+}
+
+// Dedicated poll target for hooks/use-order-progress.ts — see
+// server/trpc/routers/orders.ts's getOrderStatus for why this isn't a
+// re-use of getOrder's full query.
+export async function getOrderStatus(
+  id: string
+): Promise<{ statusEvents: StoredOrderStatusEvent[] } | null> {
+  const order = await trpcClient.orders.getOrderStatus.query({ id });
+  if (!order) return null;
+
+  return {
+    statusEvents: order.statusEvents.map((event) => ({
+      status: mapOrderStatus(event.status),
+      createdAt: toIsoString(event.createdAt),
     })),
   };
 }

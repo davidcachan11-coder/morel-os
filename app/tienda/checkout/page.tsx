@@ -139,6 +139,9 @@ export default function CheckoutPage() {
         address,
         slot: selectedSlot,
         customerName,
+        // saveOrder's transaction creates exactly one status event
+        // (confirmado) atomically alongside the order itself.
+        statusEvents: [{ status: "confirmado", createdAt: result.createdAt }],
       };
       setConfirmedOrder(order);
       setCurrentStep(3);

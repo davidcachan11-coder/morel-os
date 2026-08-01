@@ -24,7 +24,7 @@ const STAGE_TOASTS: Record<OrderStatusId, string> = {
 };
 
 export function OrderTracker({ order }: { order: StoredOrder }) {
-  const progress = useOrderProgress(order.createdAt);
+  const progress = useOrderProgress(order.id, order.statusEvents);
   const announcedStages = useRef<Set<OrderStatusId>>(new Set());
   const announcedMidRoute = useRef(false);
 
@@ -114,10 +114,10 @@ export function OrderTracker({ order }: { order: StoredOrder }) {
         <div className="flex flex-col gap-6">
           <div className="relative">
             <LiveMap progress={progress.driverProgress} active={isEnCamino || isDelivered} />
-            {isEnCamino && (
+            {progress.etaLabel && (
               <div className="absolute right-4 top-4 flex items-center gap-1.5 rounded-full bg-white/95 px-3 py-1.5 text-xs font-semibold text-brand-navy shadow-soft-lg">
                 <Clock className="h-3.5 w-3.5" />
-                Llega en {progress.etaMinutes} min
+                Llega en {progress.etaLabel}
               </div>
             )}
           </div>
