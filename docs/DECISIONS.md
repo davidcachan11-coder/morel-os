@@ -1189,3 +1189,124 @@ which respond correctly. A real OAuth/magic-link round-trip remains to be
 verified once real credentials exist (Preview Deployment, per the Sprint
 3 "Preview Deployments only" decision, is the natural first place this
 happens for real).
+
+---
+
+## 2026-08-01 — Sprint 5 PR3: staff Auth.js instance (credentials, argon2, bootstrap-admin)
+
+**Decision:** Land the second Auth.js instance from `docs/BACKEND_ARCHITECTURE.md`
+§6 — the staff-facing one (`server/auth/staff.ts`). Credentials provider
+only (email + password), mounted at `basePath: "/api/auth/staff"` with a
+`morel.staff.*` cookie prefix (zero collision with the customer instance).
+`/admin/ingresar` is the sign-in page. `prisma/bootstrap-admin.ts` is a
+new, separate, idempotent script (`npm run bootstrap:admin`) that creates
+the first `ADMIN` user from `BOOTSTRAP_ADMIN_EMAIL`/`BOOTSTRAP_ADMIN_PASSWORD`
+and no-ops if any admin already exists — deliberately not folded into
+`prisma/seed.ts`, which is dev/preview mock-data seeding
+(`INFRASTRUCTURE_ARCHITECTURE.md` §3), a different concern from real,
+any-environment, one-time admin provisioning. Scope stops exactly here,
+as instructed: no MFA, no `/admin` route protection, no authorization
+middleware, no invitation flow — `/admin` remains fully public after this
+PR, unchanged, confirmed by a direct unauthenticated request in
+verification.
+
+**A hard framework constraint, found before writing any code, not
+discovered mid-implementation:** `docs/BACKEND_ARCHITECTURE.md` §6 and
+`docs/SECURITY_ARCHITECTURE.md` §4.1/§4.4 call for staff to use
+credentials login with "database-backed, individually revocable"
+sessions. Auth.js's own config validation (`@auth/core`'s `assertConfig`,
+read directly from the installed package, not assumed) explicitly rejects
+`session.strategy: "database"` whenever every configured provider is
+type `"credentials"` — a deliberate, hard-coded restriction, not a config
+nuance. The literal wording "database sessions" is therefore not
+achievable via Auth.js's native `session.strategy` flag for a
+credentials-only instance.
+
+The actual requirement is revocability, not the specific mechanism the
+architecture doc assumed would deliver it — `SECURITY_ARCHITECTURE.md`
+§4.4 says session data must support "explicit, immediate revocation by an
+admin," which is the property that matters. This PR delivers that
+property directly: `session.strategy: "jwt"` (the configuration Auth.js
+actually supports for credentials), but the `jwt` callback creates a real
+row in the existing (previously unused, from Sprint 3's identity schema)
+`Session` table on every fresh sign-in, embeds that row's token in the
+JWT, and re-checks the row's existence on **every single subsequent
+request** — returning `null` the moment it's missing or expired. Returning
+`null` from the `jwt` callback is what `@auth/core`'s own session-resolution
+code (`lib/actions/session.js`, read directly) treats as "no session" —
+verified, not assumed. Deleting a `Session` row therefore kills that
+session on its very next use, exactly the property required, achieved
+without fighting Auth.js's supported configuration space. Verified
+end-to-end: signed in, manually deleted the `Session` row from the
+database (simulating an admin revoking access), confirmed `/api/auth/staff/session`
+immediately returned `null` on the next request.
+
+**Password hashing: `@node-rs/argon2`, not the plain `argon2` package.**
+Both implement the same algorithm (satisfies `SECURITY_ARCHITECTURE.md`
+§4.1's "MUST use argon2"), but `@node-rs/argon2` ships prebuilt native
+binaries for every relevant platform — including Vercel's serverless
+runtime target — via NAPI-RS `optionalDependencies`, avoiding the
+native-compilation/cold-start risk flagged as worth de-risking in the
+original Sprint 5 architecture review. `npm audit` confirmed zero new
+advisories from adding it.
+
+**Two security findings from this PR's own self-review, fixed before
+verification was considered complete, not left for later:**
+- **Timing side-channel in `authorize()`.** The first version returned
+  `null` immediately for a nonexistent email, a customer-role account, or
+  a row with no `passwordHash`, but only *after* running argon2's
+  deliberately-slow `verify()` for a real staff account with a wrong
+  password — a measurable timing difference an attacker could use to
+  enumerate valid staff emails. Fixed by always calling `verify()`
+  against *something* (the real hash when eligible, a fixed dummy hash
+  otherwise, generated once at module load) regardless of which failure
+  case applies, so every rejection path costs the same. Confirmed with
+  direct timing comparisons across all three rejection cases
+  post-fix (~30–40ms each, no longer distinguishable).
+- **Argon2 parameters were the library's default** (4 MiB memory cost),
+  below OWASP's current Password Storage Cheat Sheet baseline for
+  Argon2id (≥19 MiB). Fixed with explicit `{ memoryCost: 19456, timeCost: 2,
+  parallelism: 1 }`, applied identically in both `server/auth/staff.ts`
+  and `prisma/bootstrap-admin.ts` (duplicated rather than shared, since
+  the latter runs as a plain script outside Next's bundler and the
+  former's module has a `server-only` guard incompatible with that).
+
+**Known, deliberately accepted gaps — explicitly flagged, not silently
+left:**
+- **`mustChangePassword` is recorded but not enforced.** The bootstrap
+  script sets it `true` on the admin it creates, but nothing in this PR
+  checks it or forces a password change — enforcing it requires exactly
+  the route/session-gating logic this PR was scoped to exclude. This
+  means the bootstrap password remains valid indefinitely with no
+  prompt to change it until a later PR builds that enforcement. This is
+  the single most important gap from this PR to close before any real
+  (non-dev) use of the bootstrap path.
+- **No rate limiting** on the staff credentials endpoint — already
+  flagged as a Sprint-5-wide gap in the original architecture review
+  (Upstash, no sprint assignment yet); this PR is the first to actually
+  expose a staff-credential brute-force surface, making the gap concrete
+  rather than hypothetical.
+- **Expired (not deleted) `Session` rows aren't cleaned up** — they're
+  correctly rejected on read (`dbSession.expires < new Date()`), but
+  nothing deletes them, so they accumulate. A hygiene/scale concern, not
+  a security one; a cleanup job is a reasonable later addition, not
+  built here to keep this PR's scope to what's stated.
+- **No idle timeout / sliding-window renewal** — the 8-hour session
+  lifetime is a fixed, placeholder absolute expiry, not the idle-timeout
+  policy `SECURITY_ARCHITECTURE.md` §4.4 calls for. Deferred to whichever
+  PR actually designs that policy.
+
+**Verification performed:** typecheck, lint, `npm audit` gate (zero new
+advisories), production build (correct static/dynamic split — `/admin`
+itself stayed static, confirming no accidental gating). Runtime,
+end-to-end via direct HTTP requests (CSRF-aware, cookie-jar-based —
+browser UI automation proved intermittently unreliable against this
+specific form in this environment, so verification moved to a more
+deterministic method rather than being abandoned): correct credentials
+succeed and create both the session cookie and the `Session` row; wrong
+password rejected with zero session created; a real customer-role account
+(no `passwordHash`) rejected by this login surface; sign-out clears both
+the cookie and deletes the `Session` row; manually deleting a `Session`
+row invalidates that session on the next request; `bootstrap:admin` is
+idempotent (verified by running it twice); `/admin` and the customer
+instance both confirmed unaffected.
