@@ -1513,7 +1513,7 @@ to preserve the current UI's behavior at every step — matching the same
 discipline Sprint 1 and Sprint 1.5 were held to (zero functional
 regression at each checkpoint):
 
-**Phase 0 — Stand up CI before any Phase 1 PR merges.** Build, lint,
+**Phase 0 — ✅ Complete — Stand up CI before any Phase 1 PR merges.** Build, lint,
 `npm ci` (lockfile-integrity), and `npm audit` MUST all run as required
 checks (`docs/INFRASTRUCTURE_ARCHITECTURE.md` §7.1) before the first
 Phase 1 pull request is opened, and CI-gated `prisma migrate deploy`
@@ -1524,7 +1524,7 @@ MUST in this document and in `docs/ENGINEERING_STANDARDS.md`/
 `docs/SECURITY_ARCHITECTURE.md` that depends on CI enforcement is
 otherwise unenforceable from the first commit of implementation.
 
-**Phase 1 — Stand up the database, seed it from current mock data.**
+**Phase 1 — ✅ Complete — Stand up the database, seed it from current mock data.**
 Write `prisma/seed.ts` to import `data/catalog.ts`, `data/delivery.ts`,
 `data/orders.ts`, and `data/admin.ts` directly and insert their contents
 into Postgres. This guarantees the real database starts with *exactly*
@@ -1533,14 +1533,14 @@ ships with — no data-entry step, no risk of drift between mock and real
 data during the transition. Connection pooling (§15) is configured as
 part of this phase, not retrofitted after an incident.
 
-**Phase 2 — Stand up the tRPC layer, mirroring `services/`'s function
+**Phase 2 — ✅ Complete — Stand up the tRPC layer, mirroring `services/`'s function
 shapes.** `ordersRouter.getOrder(id)` and `ordersRouter.saveOrder(order)`
 should have the same effective signature as today's
 `services/orders.ts`'s `getOrder`/`saveOrder`, just backed by Postgres
 instead of `localStorage`. Ship this alongside the existing localStorage
 implementation, unused by any component yet — a pure infrastructure PR.
 
-**Phase 3 — Swap `services/orders.ts`'s implementation.** Change what's
+**Phase 3 — ✅ Complete — Swap `services/orders.ts`'s implementation.** Change what's
 *inside* `getOrder`/`saveOrder` to call the tRPC router instead of reading
 `localStorage`, without changing the exported function signatures. This
 is the moment components stop needing to change at all — the whole point
@@ -1572,7 +1572,7 @@ capacity management is deferred to Sprint 4" entry, since it only
 becomes relevant once real checkout is actually selecting among
 genuinely limited slots.
 
-**Phase 4 — Replace the order-status simulation.** Swap
+**Phase 4 — ✅ Complete — Replace the order-status simulation.** Swap
 `hooks/use-order-progress.ts`'s wall-clock derivation for a subscription
 to real `OrderStatusEvent` rows (polling to start; upgrade to a
 WebSocket/Server-Sent-Events push later if polling proves too coarse).
@@ -1656,15 +1656,15 @@ pricing changes over time.
 | Risk | Recommendation |
 |---|---|
 | `/admin` currently has zero access control, and it's tempting to keep shipping visible dashboard features before fixing that | Treat Phase 5 (auth + MFA + `/admin` gating) as a hard prerequisite for Phase 6 (payments) and any dashboard beyond Operations v0 — not a parallel-track nice-to-have. |
-| Rewriting `hooks/use-order-progress.ts` in one shot risks a regression in the app's signature "wow moment" (live tracking) | Build the real status-subscription hook alongside the existing one, feature-flagged, and cut over only after a side-by-side comparison — don't delete the working simulation until its replacement is verified end-to-end. |
+| Rewriting `hooks/use-order-progress.ts` in one shot risks a regression in the app's signature "wow moment" (live tracking) | **Resolved in Sprint 4 (PR 5)** — a direct one-shot replacement was used instead of the feature-flagged side-by-side rollout originally recommended here: rigorous pre-commit verification (typecheck/lint/build, plus live browser verification against a temporary throwaway preview route covering every stage transition and the failure/retry path) substituted for a staged rollout. See `docs/DECISIONS.md`'s Sprint 4 PR 5 entry. |
 | Payment integration carries real compliance risk (PCI scope, plus DR fiscal/NCF compliance) if approached casually | Commit to hosted/tokenized checkout from the first line of payment code, and ship `FiscalReceipt`/ITBIS handling in the same phase as payments, not as a follow-up — see Phase 6, §19. |
 | Serverless + Postgres connection exhaustion is a common, easy-to-hit failure mode | Configure pooling (Neon pooler or Prisma Accelerate) as part of Phase 1, not as a fix after an incident. |
 | Scope creep — attempting to build all 8 dashboard modules' backends simultaneously | Follow the phased order above and `docs/ROADMAP.md`'s sprint structure: Orders + Catalog + Auth first, everything else after, one module at a time, matching `docs/DASHBOARD_SPEC.md`'s own stated module dependencies. |
 | The current `services/` abstraction is only as valuable as the discipline to keep using it | Any future change to how orders/catalog/etc. are fetched should go through `services/`'s existing seam (or its future router equivalents), never a component reaching directly into Prisma or a fetch call — this is the entire reason Sprint 1 introduced that boundary. |
-| Two independently-duplicated persistence patterns already exist today (`lib/cart-store.ts`'s Zustand persistence vs. `services/orders.ts`'s hand-rolled localStorage), flagged in `docs/DECISIONS.md` | Resolve this *before* Phase 3 above, not after — migrating two different patterns to Postgres separately is more work than unifying them first, then migrating once. |
+| Two independently-duplicated persistence patterns already exist today (`lib/cart-store.ts`'s Zustand persistence vs. `services/orders.ts`'s hand-rolled localStorage), flagged in `docs/DECISIONS.md` | **Resolved in Sprint 4** — not by unifying the two patterns as originally recommended, but by elimination: `services/orders.ts`'s hand-rolled localStorage disappeared entirely once it became a thin adapter over the real backend, so there was nothing left to unify. See `docs/DECISIONS.md`'s "`services/orders.ts` becomes a UI/tRPC adapter" entry. |
 | `generateOrderId()`'s "MO-" + small-numeric-range format (~10,000 possible values) was trivially enumerable, and PR 6 exposed a public, unauthenticated `getOrder(id)` procedure over it — see `docs/DECISIONS.md`'s "Order tracking identifiers must not be enumerable" entry | **Resolved in Sprint 3**, not deferred to Phase 3: `saveOrder` generates an opaque `Order.id` (`@default(cuid())`) with a separate, non-secret `orderNumber` field for display — see `docs/DECISIONS.md`'s "saveOrder stays in Sprint 3" entry. Phase 3 only needs to remove/replace `generateOrderId()`'s call site, not the id scheme itself. |
-| `saveOrder` has no request idempotency — a double-click or client retry against the real checkout UI could create two distinct, fully valid orders from one logical submission | **Deliberately deferred to Phase 3, not forgotten** — see `docs/DECISIONS.md`'s "saveOrder idempotency is deferred to Sprint 4" entry. A required, client-supplied idempotency key must be part of the same PR that wires `services/orders.ts` to call `saveOrder` for real, not a separate follow-up; the exposure window is zero until then since nothing calls `saveOrder` before Phase 3. |
-| `saveOrder` validates a `DeliverySlot` exists but never checks or decrements `spotsLeft` — no overbooking protection or concurrency handling exists for slot capacity | **Deliberately deferred to Phase 3, not forgotten** — see `docs/DECISIONS.md`'s "Delivery-slot capacity management is deferred to Sprint 4" entry. Mirrors the existing checkout's behavior (which never enforced capacity either); only becomes relevant once a real client is actually selecting among genuinely limited slots. |
+| `saveOrder` has no request idempotency — a double-click or client retry against the real checkout UI could create two distinct, fully valid orders from one logical submission | **Resolved in Sprint 4 (PR 2)** — a required, client-supplied idempotency key, checked first in the transaction, with the race handled via an outer catch after a real Postgres rollback (not a caught-and-continued mid-transaction recovery — see `docs/DECISIONS.md`'s transaction-semantics entry for why that distinction matters). |
+| `saveOrder` validates a `DeliverySlot` exists but never checks or decrements `spotsLeft` — no overbooking protection or concurrency handling exists for slot capacity | **Resolved in Sprint 4 (PR 2)** — an atomic conditional decrement (`updateMany` with `spotsLeft: { gt: 0 }`), ordered after the idempotency check so a retried request never double-decrements. |
 | Auth.js's self-hosted model means this team owns MFA/session UX that a managed provider would ship for free (§1.5) | Budget real implementation time for §16.3/16.4 explicitly — it's a deliberate trade for lower long-term vendor cost, not a gap to discover mid-sprint. |
 | DR payment-gateway (Azul/CardNet) integration has thinner global documentation/community support than a Stripe-equivalent decision would | Budget more integration and support time than a Stripe-based estimate would suggest; confirm current certificate/API requirements directly with each provider before implementation, since DR-specific gateway documentation changes are less likely to be reflected in third-party tutorials. |
 | WhatsApp Business template approval (§12) is a calendar-time dependency, not an instant integration step | Register and submit templates for approval well before Phase 6/notification work is scheduled to ship, so approval lead time doesn't block the migration timeline. |

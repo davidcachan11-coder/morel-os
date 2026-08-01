@@ -12,6 +12,90 @@ changes (documentation, internal reorganization) as well as fixes.
 
 Nothing pending beyond what's tracked in `docs/ROADMAP.md`.
 
+## [0.3.1] - 2026-07-31
+
+Documentation refresh reflecting Sprint 3 and Sprint 4's completion. No
+application code changed in this release, consistent with this
+project's policy that documentation-only work is a patch bump.
+
+### Changed
+- `docs/PROJECT_STATUS.md` — current phase moved to Sprint 5 (not yet
+  started); Sprint 3/4 added to Completed Modules; the now-stale "real
+  backend"/"CI" pending items removed (both shipped); the accessibility
+  pending item narrowed to specifically the payment step, since the
+  Entrega step gained a real `<form>` in Sprint 4; a new pending item
+  recorded for rate limiting, since Sprint 4's polling increases call
+  volume against already-public, unauthenticated procedures.
+- `docs/ROADMAP.md` — Sprint 3 and Sprint 4 marked ✅ Complete.
+- `docs/BACKEND_ARCHITECTURE.md` — §19 Phases 0–4 marked ✅ Complete;
+  §21's risk-table rows for the four risks Sprint 3/4 resolved (the
+  `use-order-progress.ts` rewrite, the cart-store/services persistence
+  duplication, `saveOrder` idempotency, delivery-slot capacity) updated
+  to record what was actually resolved and, where the actual approach
+  differed from the original recommendation, how and why.
+
+## [0.3.0] - 2026-07-31
+
+Sprint 4 — Service Layer Cutover & Live Order Status.
+
+### Added
+- Vanilla `@trpc/client` (`lib/trpc-client.ts`) — no TanStack Query; see
+  `docs/DECISIONS.md` for why.
+- `saveOrder` request idempotency (required, client-supplied UUID key,
+  checked first in the transaction) and delivery-slot capacity
+  enforcement (atomic conditional decrement), closing both gaps
+  deliberately deferred from Sprint 3.
+- Checkout collects real customer name/email/phone, wrapped in a real
+  `<form>` with `autoComplete` hints (`docs/ENGINEERING_STANDARDS.md`
+  §11), and persists a client-generated idempotency key across a
+  refresh (`lib/checkout-store.ts`).
+- Live order-status polling: a dedicated `ordersRouter.getOrderStatus`
+  procedure (deliberately not a reuse of `getOrder`'s full query) and a
+  rebuilt `hooks/use-order-progress.ts` replace the wall-clock
+  simulation with real `OrderStatusEvent` polling (5-second interval,
+  stopping once `ENTREGADO` is reached). A missing/unreachable order now
+  shows a real "Pedido no encontrado" state instead of fabricated demo
+  data.
+
+### Changed
+- `services/orders.ts` now calls the real backend instead of
+  `localStorage`; `generateOrderId()` is gone. Order-tracking links now
+  display `orderNumber`, not the internal `id`.
+- The order tracker's ETA and driver-map animation are now explicitly
+  symbolic (static approximate ETA, poll-tick-driven map movement)
+  rather than derived from a fixed fake timeline — no real GPS/ETA data
+  source exists yet. See `docs/DECISIONS.md` for the full reasoning.
+
+## [0.2.0] - 2026-07-31
+
+Sprint 3 — Backend Foundation Implementation.
+
+### Added
+- CI pipeline: build, lint, `npm ci` (lockfile integrity), and
+  `npm audit` as required checks; CI-gated `prisma migrate deploy`.
+- Initial Prisma schema, migration, and generated client, backed by a
+  standalone Neon Postgres database.
+- `prisma/seed.ts`, seeding the database from `data/*.ts` — byte-identical
+  to the existing mock catalog/demo data — plus explicitly marked
+  placeholder values for the DR-specific fields absent from the
+  Argentina-themed mock data.
+- tRPC infrastructure (`server/trpc/`) and three routers: `catalogRouter`
+  and `deliveryRouter` (read-only), and `ordersRouter` (`getOrder`
+  read-only, `saveOrder` guest checkout).
+- Guest checkout in `saveOrder`: customer identity resolved by email
+  (auto-creates `User`+`Customer`, never overwrites an existing
+  customer's stored name/phone), default `Branch` discovered from the
+  database, totals computed server-side in `Prisma.Decimal`, and an
+  opaque `Order.id` (`cuid()`) with a separate `orderNumber` for
+  display — closing the enumerable-order-id gap flagged in
+  `docs/DECISIONS.md`.
+
+### Changed
+- None of this release's new backend surface is wired into any
+  component yet — `services/orders.ts` still reads/writes
+  `localStorage`, matching `docs/BACKEND_ARCHITECTURE.md` §19 Phase 2's
+  explicit "ship alongside the existing implementation" sequencing.
+
 ## [0.1.2] - 2026-07-31
 
 Architecture freeze — concludes the Architecture & Engineering phase.

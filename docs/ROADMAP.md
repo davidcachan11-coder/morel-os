@@ -53,7 +53,7 @@ the target market, complete entity model and Prisma schema sketch, and a
 `docs/ENGINEERING_STANDARDS.md`), independently reviewed and refined
 before approval. See `docs/BACKEND_ARCHITECTURE.md` for the full design.
 
-### Sprint 3 — Backend Foundation Implementation (Next)
+### Sprint 3 — Backend Foundation Implementation ✅ Complete
 Implements `docs/BACKEND_ARCHITECTURE.md` §19 Phase 0–2: stand up CI
 (build/lint/audit gates, CI-gated `prisma migrate deploy` — a
 prerequisite for every other implementation sprint below, not a
@@ -63,7 +63,7 @@ up the tRPC layer mirroring `services/`'s function shapes — built
 alongside the existing `localStorage` implementation, not yet wired to
 any component.
 
-### Sprint 4 — Service Layer Cutover & Live Order Status (Planned)
+### Sprint 4 — Service Layer Cutover & Live Order Status ✅ Complete
 Phase 3–4: resolve the `lib/cart-store.ts`/`services/orders.ts`
 persistence-pattern duplication flagged in `docs/DECISIONS.md` (a
 prerequisite, per `docs/BACKEND_ARCHITECTURE.md` §19's own note — not
