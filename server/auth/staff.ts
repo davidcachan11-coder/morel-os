@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import { PrismaAdapter } from "@auth/prisma-adapter";
 import { hash, verify } from "@node-rs/argon2";
 import { prisma } from "@/server/db/client";
 
@@ -48,8 +49,34 @@ const DUMMY_HASH_PROMISE = hash(randomUUID(), ARGON2_OPTIONS);
  * session") the moment the row is missing or expired. Deleting a `Session`
  * row therefore kills that session on its very next use — see
  * docs/DECISIONS.md's "Sprint 5 PR3" entry for the full reasoning.
+ *
+ * `adapter: PrismaAdapter(prisma)` below is NOT a reversal of that
+ * decision and does NOT change session handling — `session.strategy`
+ * stays `"jwt"`, so Auth.js's actual runtime session logic never touches
+ * this adapter, and a Credentials-only provider never calls its
+ * user/account methods either. It exists purely to satisfy
+ * `@auth/core`'s `assertConfig`, which tracks whether *any* configured
+ * provider across the whole process is type `"email"` in a
+ * module-level, never-reset variable (`hasEmail` in `assert.ts`) — not
+ * scoped per `NextAuth()` instance. The customer instance's Resend
+ * (email) provider sets that flag process-wide the first time its own
+ * config is asserted; every request to *this* instance afterward then
+ * fails `assertConfig`'s "email login requires an adapter" check, even
+ * though this instance has no email provider at all. Confirmed directly
+ * against @auth/core's installed source (`hasEmail`/`hasCredentials`/
+ * `hasWebAuthn` are declared with `let` outside `assertConfig`, only
+ * ever set to `true`, never reset) and reproduced by hitting the
+ * customer instance once, then this one, in the same process — see
+ * docs/DECISIONS.md's "Runtime regression" entry for the full
+ * investigation. Giving this instance an adapter that satisfies the
+ * check makes it correct independent of which global flags an
+ * unrelated sibling instance has already set — the only fix available
+ * without patching a third-party package, and the durable one, since a
+ * long-running server inevitably serves both instances over its
+ * lifetime regardless of request order.
  */
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  adapter: PrismaAdapter(prisma),
   basePath: "/api/auth/staff",
   secret: process.env.AUTH_SECRET,
   session: { strategy: "jwt", maxAge: STAFF_SESSION_MAX_AGE_SECONDS },

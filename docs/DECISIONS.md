@@ -1455,3 +1455,148 @@ copy changes, no functional or architectural impact). Spot-verified in a
 real browser session across the landing page, checkout's empty-cart
 state, and the customer sign-in page — all rendering the corrected
 tuteo copy.
+
+---
+
+## 2026-08-01 — Runtime regression: `MissingAdapter` on `/admin` and `/admin/ingresar`, root-caused and fixed
+
+**Symptom (reported, then independently reproduced):** visiting `/admin`
+or `/admin/ingresar` threw `MissingAdapter: Email login requires an
+adapter`, pointing into the staff authentication flow. The prior PR3/PR4
+verification summaries had reported the staff flow working end-to-end and
+did not catch this — investigated from scratch per instruction, not
+assumed to be explained by the earlier (incorrect) "dev-server hot-reload
+staleness" dismissal from PR3's own testing notes.
+
+**Reproduction:** in a single, fresh `next dev` process — (1) request
+`/admin` or `/admin/ingresar` alone: succeeds. (2) Additionally render
+`/cuenta/ingresar` (the customer sign-in page) first, in the *same*
+process, *then* request `/admin`/`/admin/ingresar`: the staff instance's
+`/csrf` endpoint starts returning `undefined`, and an actual credentials
+sign-in attempt returns HTTP 500 with `"There was a problem with the
+server configuration"` — the exact symptom reported. Order matters:
+customer-then-staff reproduces it; staff-then-customer does not visibly
+break staff (confirmed separately — see "why previous verification missed
+this" below).
+
+**Root cause, confirmed against the actual installed source, not
+memory or assumption:** `node_modules/@auth/core/src/lib/utils/assert.ts`
+declares `hasCredentials`, `hasEmail`, and `hasWebAuthn` as **module-level
+`let` variables**, outside the `assertConfig` function:
+
+```ts
+let hasCredentials = false
+let hasEmail = false
+let hasWebAuthn = false
+
+export function assertConfig(request, options) {
+  ...
+  for (const p of options.providers) {
+    ...
+    if (provider.type === "credentials") hasCredentials = true
+    else if (provider.type === "email") hasEmail = true
+    ...
+  }
+  ...
+  if (hasEmail || session?.strategy === "database" || (!session?.strategy && adapter)) {
+    if (hasEmail) {
+      if (!adapter) return new MissingAdapter("Email login requires an adapter")
+      ...
+```
+
+These flags are **never reset** anywhere in the module — they only ever
+flip `false → true`. Because Node's module cache means every import of
+`@auth/core` in one process shares the same module instance, these
+variables are effectively **global mutable state shared across every
+`NextAuth()` instance running in that process** — not scoped per
+instance, despite `assertConfig` being called once per instance, per
+request. `assertConfig` runs on every request through `Auth()` (confirmed
+from the stack trace: `assertConfig` ← `Auth()`), so the first time
+*any* request anywhere in the process causes the customer instance's
+`assertConfig` to run (it has the Resend `type: "email"` provider), the
+global `hasEmail` flag flips to `true` **permanently, for the rest of
+that process's life** — including for every future request to the
+*staff* instance, which has no email provider and, by design (PR3's
+"Sprint 5 PR3" entry), no adapter at all. From that point on, the staff
+instance's own `assertConfig` call sees `hasEmail === true` (a flag it
+never set and has no email provider to justify) and fails the `if
+(!adapter) return MissingAdapter(...)` check.
+
+This is a genuine upstream design limitation in `next-auth@5.0.0-beta.32`
+/ the resolved `@auth/core@0.41.3` (confirmed to be the actual installed,
+currently-latest version — no newer beta exists to upgrade to, and the
+peer-dependency-satisfying version resolved by `@auth/prisma-adapter` is
+the same `0.41.3` with the identical unreset variables), not a bug
+introduced by this project's configuration. Running two independently
+provider-configured Auth.js instances in one process is not something
+`@auth/core`'s config validation was written to support cleanly.
+
+**Why previous verification missed it, specifically:** every prior
+testing session (PR2, PR3, PR4) restarted the dev server fresh and then
+tested *either* the customer instance *or* the staff instance in depth,
+but never both, in the customer-then-staff order, within the same
+process. PR4's regression checks hit `/api/auth/customer/session` and
+`/api/auth/customer/providers` directly via `curl` — those two specific
+endpoints do **not** trigger the code path that runs the full provider
+loop (confirmed by testing them in isolation during this investigation:
+neither one reproduces the poisoning), which is why they read as a clean
+"customer instance unaffected" regression check without ever actually
+exercising the failure mode. Only *rendering* `/cuenta/ingresar` (the
+page, via its own `auth()` call) reliably triggers it. Separately, once
+the process *was* poisoned, `auth()` calls inside `ProtectedAdminLayout`
+and `AdminIngresarPage` swallowed the resulting config error and behaved
+as if there were simply no session — producing the *same* externally
+observable HTTP status (a 307 redirect to `/admin/ingresar`) as a
+genuinely unauthenticated request. Every status-code-based `curl` check
+run during PR3/PR4 verification therefore looked correct even after the
+process was already poisoned; only an actual `signIn()` call (which does
+not swallow the error) surfaced it as a real 500 — which is exactly what
+manual browser testing, clicking the real sign-in button, would hit, and
+exactly what was reported. This investigation's own first reproduction
+attempt (`curl` to `/api/auth/customer/session`) made the same mistake
+before a second, more careful pass isolated the actual trigger.
+
+**Fix:** `server/auth/staff.ts` now passes `adapter: PrismaAdapter(prisma)`
+into its `NextAuth()` config. `session.strategy` stays explicitly `"jwt"`
+— unchanged from PR3 — so this does not reverse that decision or its
+reasoning: Auth.js's actual runtime session logic is driven entirely by
+`session.strategy`, not by adapter presence, and a `Credentials`-only
+provider never calls an adapter's user/session methods in Auth.js's
+internal flow regardless of whether one is configured. The adapter exists
+solely to satisfy `assertConfig`'s structural check, correctly, whichever
+global flag an unrelated sibling instance has already set — this is the
+only available fix that doesn't require patching a third-party package,
+and it's a durable one: a long-running production server will inevitably
+serve both customer and staff traffic over its lifetime, so avoiding the
+trigger order is not a real option.
+
+**Why this is the fix and not a workaround:** it doesn't catch, suppress,
+or route around the error — it makes the staff config genuinely satisfy
+the exact condition `assertConfig` checks (`hasEmail ⇒ adapter must
+exist`), the same way the customer instance already, correctly, does.
+Confirmed empirically that the adapter is otherwise fully inert for this
+instance: `Account` and `VerificationToken` row counts were checked
+before and after extensive staff-auth exercise in this investigation and
+saw zero new rows attributable to it (the one pre-existing
+`VerificationToken` row is a leftover `test-customer@example.com` magic-link
+attempt from PR2's own testing), and `Session` rows continued to be
+created exactly once per sign-in via the existing manual
+`prisma.session.create()` call in the `jwt` callback, not via the
+adapter's own `createSession`.
+
+**Verification performed:** typecheck, lint, build (identical
+static/dynamic route split to before). Reproduced the exact prior-failing
+sequence against the fix — render `/cuenta/ingresar`, then `/admin`,
+`/admin/ingresar`, and a real credentials sign-in — all succeed with no
+error, in both direct-`curl` and real-browser-session form submissions.
+Full regression pass on the rest of the auth system in the same
+now-fixed process: wrong password and a customer-role account both still
+correctly rejected with zero session rows created; manually deleting a
+`Session` row still instantly invalidates that session (revocation);
+sign-out still clears the cookie and deletes the `Session` row; a fake
+`morel.customer.session-token` cookie still cannot satisfy the staff
+gate (cookie-namespace isolation intact); the full sign-in →
+forced-password-change → dashboard flow was re-verified end-to-end in an
+actual browser session, in the customer-then-staff order that previously
+broke; customer instance endpoints (`session`, `providers`, `csrf`, the
+`/cuenta/ingresar` page) all confirmed unaffected throughout.
