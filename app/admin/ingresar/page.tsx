@@ -43,7 +43,7 @@ export default async function AdminIngresarPage() {
         <CardHeader>
           <CardTitle className="text-xl">Acceso de personal</CardTitle>
           <CardDescription>
-            Ingresá con tu email y contraseña. Este acceso es solo para
+            Ingresa con tu email y contraseña. Este acceso es solo para
             personal de Morel — creado por un administrador, no
             autoregistro.
           </CardDescription>

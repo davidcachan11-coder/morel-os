@@ -46,9 +46,9 @@ export default async function IngresarPage() {
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-4 py-16 sm:px-6">
       <Card className="shadow-soft">
         <CardHeader>
-          <CardTitle className="text-xl">Ingresá a tu cuenta</CardTitle>
+          <CardTitle className="text-xl">Ingresa a tu cuenta</CardTitle>
           <CardDescription>
-            Accedé con tu cuenta de Google o recibí un enlace de acceso por
+            Accede con tu cuenta de Google o recibe un enlace de acceso por
             correo — sin contraseña.
           </CardDescription>
         </CardHeader>
@@ -74,7 +74,7 @@ export default async function IngresarPage() {
                 type="email"
                 autoComplete="email"
                 required
-                placeholder="vos@ejemplo.com"
+                placeholder="tu@ejemplo.com"
               />
             </div>
             <Button type="submit" className="w-full">

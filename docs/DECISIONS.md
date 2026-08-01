@@ -1397,3 +1397,61 @@ fresh accessibility-tree read immediately before each click consistently
 resolved it; old/new password behavior confirmed via direct HTTP
 afterward for determinism. `/`, `/tienda`, the customer Auth.js instance,
 and the customer-cookie-isolation check all confirmed unaffected.
+
+---
+
+## 2026-08-01 — Project-wide Rioplatense voseo → neutral/DR Spanish normalization
+
+**Decision:** Replaced every user-facing Rioplatense voseo verb form
+(`Ingresá`, `Accedé`, `Recibí`, `Elegí`, `Seleccioná`, `Completá`, and
+their siblings — `Recorré`, `Armá`, `Mirá`, `Probá`, `Agregá`, `Marcá`,
+`querés`, `Revisá`, `Confirmá`, `Intentá`, `Verificá`) with the standard
+tuteo form (`Ingresa`, `Accede`, `Recibe`, `Elige`, `Selecciona`,
+`Completa`, `Recorre`, `Arma`, `Mira`, `Prueba`, `Agrega`, `Marca`,
+`quieres`, `Revisa`, `Confirma`, `Intenta`, `Verifica`) across every route
+this session touched: landing (`app/page.tsx`), store (`app/tienda/page.tsx`),
+checkout (`app/tienda/checkout/page.tsx`), the cart drawer
+(`components/cart-drawer.tsx`), order tracking's not-found state
+(`components/pedido/order-tracker-loader.tsx`), and both customer and
+staff authentication (`app/cuenta/ingresar/page.tsx`,
+`app/admin/ingresar/page.tsx`, part of the same PR4 commit). Also changed
+the customer sign-in email placeholder from `vos@ejemplo.com` to
+`tu@ejemplo.com` — not a grammatical voseo form, but the same
+Rioplatense-specific pronoun usage in a different guise.
+
+**Verification method, not just a find-and-replace:** every `.tsx`/`.ts`
+file under `app/`, `components/`, `data/`, `lib/`, `hooks/`, `services/`,
+`config/`, and `constants/` was read in full (not just grep-matched) to
+catch phrasing a verb-form grep could miss, covering every category this
+task named — landing, store, checkout, order tracking, customer account,
+both auth surfaces, admin dashboard, buttons, labels, placeholders,
+validation messages, toasts, empty states, confirmations, and dialogs (no
+`<Dialog>` component is actually used anywhere in the app today — only
+`<Sheet>`, already reviewed). A final grep across the same tree confirmed
+zero remaining matches for every known voseo form. No other
+Rioplatense-specific vocabulary (slang, "che," etc.) was found beyond the
+grammatical voseo itself — the existing copy was otherwise already
+neutral.
+
+**Explicitly not touched, and why:**
+- **Email copy.** No custom email template exists in this codebase — the
+  Resend magic-link provider (PR2) uses Auth.js's own default template,
+  which is English, not Argentine Spanish. There is no Spanish email copy
+  to normalize. Building a custom Spanish email template would be new
+  functionality, not a normalization pass, and stays out of scope here
+  per "do not change functionality."
+- **Argentina-themed mock data** (`data/*.ts`'s product names, addresses
+  like "San Miguel de Tucumán," demo customer names) — this is a content/
+  market-scope issue already flagged, separately and earlier, in this
+  file's Sprint 2 entry ("this document's market re-scope to the DR is
+  not yet reflected in ... `data/*.ts`"). It's a data-content question,
+  not a grammar question, and a substantially larger, separate effort
+  (real DR products, addresses, pricing) — conflating it with this pass
+  would have silently expanded scope beyond what was asked.
+
+**Verification performed:** typecheck, lint, and build all clean, with an
+identical route/static-dynamic split to before this pass (confirming pure
+copy changes, no functional or architectural impact). Spot-verified in a
+real browser session across the landing page, checkout's empty-cart
+state, and the customer sign-in page — all rendering the corrected
+tuteo copy.

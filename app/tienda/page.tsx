@@ -88,7 +88,7 @@ export default function TiendaPage() {
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
             <p className="text-lg font-medium text-foreground">Sin resultados</p>
             <p className="text-sm text-muted-foreground">
-              Probá con otra búsqueda o elegí otra categoría.
+              Prueba con otra búsqueda o elige otra categoría.
             </p>
           </div>
         ) : (

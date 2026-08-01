@@ -213,10 +213,10 @@ export default function LandingPage() {
               <div className="absolute -bottom-24 left-10 h-64 w-64 rounded-full bg-brand-orange/10 blur-3xl" />
               <div className="relative">
                 <h2 className="text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                  Recorré la experiencia completa en minutos
+                  Recorre la experiencia completa en minutos
                 </h2>
                 <p className="mx-auto mt-4 max-w-xl text-white/70">
-                  Armá un pedido real, elegí un horario de entrega y mirá el
+                  Arma un pedido real, elige un horario de entrega y mira el
                   seguimiento en vivo tal como lo vería un cliente de Morel.
                 </p>
                 <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">

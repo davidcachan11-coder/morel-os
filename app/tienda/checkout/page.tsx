@@ -166,7 +166,7 @@ export default function CheckoutPage() {
         error.data.code !== "INTERNAL_SERVER_ERROR";
       const message = isSafeToShow
         ? (error as TRPCClientError<AppRouter>).message
-        : "No pudimos procesar tu pedido. Intentá de nuevo.";
+        : "No pudimos procesar tu pedido. Intenta de nuevo.";
       toast.error(message);
     } finally {
       setIsSubmitting(false);
@@ -181,7 +181,7 @@ export default function CheckoutPage() {
         </div>
         <h1 className="text-xl font-semibold text-foreground">Tu carrito está vacío</h1>
         <p className="max-w-sm text-sm text-muted-foreground">
-          Agregá productos desde la tienda antes de continuar con el pedido.
+          Agrega productos desde la tienda antes de continuar con el pedido.
         </p>
         <Link href="/tienda">
           <Button className="mt-2 rounded-full">Ir a la tienda</Button>
@@ -249,7 +249,7 @@ export default function CheckoutPage() {
                   <div className="flex items-start gap-3 rounded-xl bg-brand-orange/10 p-3.5">
                     <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand-orange-dark" />
                     <p className="text-xs leading-relaxed text-brand-orange-dark">
-                      Marcá los productos que <strong>nunca</strong> querés que sustituyamos.
+                      Marca los productos que <strong>nunca</strong> quieres que sustituyamos.
                       Para el resto, si falta stock, elegimos el reemplazo más parecido.
                     </p>
                   </div>
@@ -352,7 +352,7 @@ export default function CheckoutPage() {
                   </div>
 
                   <p className="mb-3 mt-6 text-sm font-medium text-foreground">
-                    Elegí un horario de entrega
+                    Elige un horario de entrega
                   </p>
                   <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                     {deliverySlots.map((slot) => {

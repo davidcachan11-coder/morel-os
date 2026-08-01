@@ -53,7 +53,7 @@ export function CartDrawer() {
             </div>
             <p className="text-sm font-medium text-foreground">Tu carrito está vacío</p>
             <p className="text-sm text-muted-foreground">
-              Agregá productos desde la tienda para empezar tu pedido.
+              Agrega productos desde la tienda para empezar tu pedido.
             </p>
             <Link href="/tienda">
               <Button className="mt-2" onClick={closeDrawer}>

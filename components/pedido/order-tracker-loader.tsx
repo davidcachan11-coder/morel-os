@@ -52,7 +52,7 @@ export function OrderTrackerLoader({ orderId }: { orderId: string }) {
         </div>
         <h1 className="text-xl font-semibold text-foreground">Pedido no encontrado</h1>
         <p className="max-w-sm text-sm text-muted-foreground">
-          No pudimos encontrar un pedido con ese enlace. Verificá que la
+          No pudimos encontrar un pedido con ese enlace. Verifica que la
           dirección sea correcta.
         </p>
         <Link href="/tienda">
