@@ -978,3 +978,68 @@ than reflecting how long ago the real event actually happened. This is
 inherent to a deliberately non-measuring, decorative value — the
 alternative (deriving it from real elapsed time) would reintroduce the
 exact fabricated-precision problem this design avoids.
+
+---
+
+## 2026-07-31 — Sprint 5 pre-implementation architectural review
+
+**Decision:** Before any Sprint 5 code, `docs/ROADMAP.md`, `docs/BACKEND_ARCHITECTURE.md`,
+`docs/SECURITY_ARCHITECTURE.md`, `docs/ENGINEERING_STANDARDS.md`,
+`docs/PROJECT_STATUS.md`, this file, `CONTRIBUTING.md`, and the current
+codebase were re-read in full and cross-checked against each other. No
+drift was found between the documentation and the actual code
+(`prisma/schema.prisma`'s identity block, `server/trpc/trpc.ts`'s
+`protectedProcedure` stub, and `app/admin/page.tsx`'s current lack of any
+access control all matched what the docs claimed). The review surfaced
+several gaps the existing docs didn't yet resolve, listed below with what
+was decided.
+
+**Staff account provisioning is admin-created with a temporary password,
+not a token-based email invite.** `docs/BACKEND_ARCHITECTURE.md` §6 said
+"invite-only" without specifying a mechanism, and no `Invite`-style entity
+exists anywhere in §3 or the schema. Evaluated against a token-based email
+invite (an `Invite` entity, a hashed/expiring token, delivery via Resend).
+Rejected the email-invite route for now: it pulls Resend into scope a full
+milestone earlier than the roadmap otherwise schedules it and adds a new
+entity/router for a team at this size that doesn't need it yet. An admin
+creates the `User`/role directly with a temporary password (relayed
+out-of-band) and the account is forced to change it on first login
+(`User.mustChangePassword`, added in PR1 below). Revisit if/when team size
+or staff turnover makes out-of-band password relay genuinely impractical.
+
+**Sprint 5 PR1 (schema only) adds:** `User.emailVerified` (standard
+Auth.js Prisma-adapter field — added after initial review of this PR,
+once it was confirmed PR2's magic-link provider requires it; null for
+every row today, since no verification mechanism exists yet, and adding
+it now avoids a second migration when PR2 starts Auth.js), `User.passwordHash`
+(argon2, staff credentials login only — customers never set this),
+`User.mustChangePassword` (set on admin-created accounts, cleared once the
+staff member sets their own password), `User.totpSecret` (encrypted TOTP
+secret, column reserved now so the enrollment/verification PR needs no
+migration of its own), and a new `RecoveryCode` model (hashed, single-use
+MFA recovery codes, `SECURITY_ARCHITECTURE.md` §4.2). `MFA_ENCRYPTION_KEY` (encrypts
+`totpSecret`, kept independent from `AUTH_SECRET` so rotating one never
+invalidates the other per §16.2) and `BOOTSTRAP_ADMIN_EMAIL`/
+`BOOTSTRAP_ADMIN_PASSWORD` (the first-admin provisioning path §6 already
+required but never added to §10's variable list) are added to
+`docs/BACKEND_ARCHITECTURE.md` §10 and mirrored in `.env.example`. No
+auth logic, adapters, routes, or login flows are implemented in this PR —
+matching the same schema-then-logic sequencing Sprint 3 already
+established for the rest of the identity tables.
+
+**Deferred to later Sprint 5 PRs, each requiring its own explicit
+decision at the time:** the two-Auth.js-instance session-strategy design
+(JWT for customers, database sessions for staff), where `/admin` route
+gating actually runs (a Node-runtime layout check, not Edge middleware,
+given database-backed staff sessions), whether `branch_manager` needs MFA
+given Morel's current single-branch operation, guest-checkout-to-real-login
+account linking (`allowDangerousEmailAccountLinking`), whether Upstash
+rate limiting ships within Sprint 5 given `SECURITY_ARCHITECTURE.md` §6.7's
+MUST first becomes live the moment Sprint 5's login endpoints exist, and
+Google OAuth's incompatibility with per-PR Vercel preview URLs. None of
+these affect PR1's schema-only scope.
+
+**Trade-off:** `passwordHash`/`totpSecret` sit unused on every `User` row
+until the PRs that implement credentials login and MFA enrollment land —
+accepted, matching the same trade-off Sprint 3 already made landing the
+rest of the identity schema two sprints ahead of its logic.

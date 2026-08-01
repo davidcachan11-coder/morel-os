@@ -504,9 +504,10 @@ either already exists as a mock type in `data/*.ts`/`services/orders.ts`
 compliance requirement (marked accordingly).
 
 **Identity & Access**
-- `User` — base identity for every human in the system (customer, driver, staff, admin), discriminated by role.
+- `User` — base identity for every human in the system (customer, driver, staff, admin), discriminated by role. **[Sprint 5 PR1: gains `emailVerified` (standard Auth.js adapter field, used by the magic-link provider), `passwordHash`/`mustChangePassword` for staff credentials login, and `totpSecret` for MFA — see §6, §16.3]**
 - `Role` — the RBAC roles defined in §7.
 - `Session` / `Account` / `VerificationToken` — standard Auth.js/Prisma-adapter tables.
+- `RecoveryCode` — hashed, single-use MFA recovery codes, one-to-many from `User`. **[Sprint 5 PR1, new — see §16.3]**
 
 **Organization**
 - `Branch` — a physical store location. **[existing, currently a free string on `AdminOrder.branch`]**
@@ -855,6 +856,10 @@ AUTH_SECRET=
 AUTH_URL=
 AUTH_GOOGLE_ID=
 AUTH_GOOGLE_SECRET=
+MFA_ENCRYPTION_KEY=        # encrypts User.totpSecret at rest — independent of AUTH_SECRET so
+                            # rotating one never invalidates the other (§16.2)
+BOOTSTRAP_ADMIN_EMAIL=      # one-time first-admin provisioning (§6) — the seed script no-ops
+BOOTSTRAP_ADMIN_PASSWORD=   # once any ADMIN user already exists; not a standing feature
 
 # Payments (Dominican Republic)
 AZUL_MERCHANT_ID=

@@ -26,6 +26,20 @@
 // Everything else (Role enum values, relation cardinality, the "current
 // status derives from OrderStatusEvent, not a redundant field on Order"
 // design, required vs. optional fields) matches the sketch as written.
+//
+// Sprint 5 PR 1 (schema only — no auth logic, no login, no routing; see
+// docs/DECISIONS.md's "Sprint 5 PR1" entry) adds, beyond the sketch:
+//   - User.emailVerified — standard Auth.js Prisma-adapter field, required
+//     by the magic-link provider landing in PR2. Null for every row today;
+//     no verification mechanism exists yet.
+//   - User.passwordHash/mustChangePassword — staff sign in via credentials
+//     with an admin-issued temporary password (BACKEND_ARCHITECTURE.md §6);
+//     customers authenticate via OAuth/magic link and never set these.
+//   - User.totpSecret — encrypted TOTP secret for the MFA roles in
+//     SECURITY_ARCHITECTURE.md §4.2. Enrollment/verification logic is a
+//     later Sprint 5 PR; this PR only reserves the column.
+//   - RecoveryCode — hashed, single-use MFA recovery codes
+//     (SECURITY_ARCHITECTURE.md §4.2), not in the original sketch.
 
 generator client {
   provider = "prisma-client-js"
@@ -57,20 +71,39 @@ enum Role {
 }
 
 model User {
-  id         String   @id @default(cuid())
-  email      String   @unique
-  phone      String? // DR: WhatsApp-first notifications key off this field
-  name       String?
-  role       Role
-  mfaEnabled Boolean  @default(false) // required true for FINANCE/OPS_MANAGER/ADMIN — enforced in Sprint 5, not here
-  createdAt  DateTime @default(now())
+  id            String    @id @default(cuid())
+  email         String    @unique
+  // Auth.js Prisma-adapter standard field — required by the magic-link
+  // provider (PR2) to record when an email was confirmed. No verification
+  // mechanism exists yet (see docs/DECISIONS.md's Sprint 3 entry), so this
+  // is null for every row today; reserved now for the same "avoid a second
+  // disruptive migration" reasoning as the rest of this PR.
+  emailVerified DateTime?
+  phone         String? // DR: WhatsApp-first notifications key off this field
+  name          String?
+  role          Role
+  mfaEnabled    Boolean   @default(false) // required true for FINANCE/OPS_MANAGER/ADMIN — enforced in Sprint 5, not here
+  createdAt     DateTime  @default(now())
+
+  // Staff credentials login only (SECURITY_ARCHITECTURE.md §4.1) — argon2
+  // hash. Customers authenticate via OAuth/magic link and never set this.
+  passwordHash String?
+  // True when an admin creates a staff account with a temporary password
+  // (approved Sprint 5 staff-provisioning decision); cleared once the
+  // staff member sets their own. Meaningless/unused for customers.
+  mustChangePassword Boolean @default(false)
+  // Encrypted TOTP secret (SECURITY_ARCHITECTURE.md §4.2) — enrollment and
+  // verification logic land in a later Sprint 5 PR; this column is reserved
+  // now so that PR doesn't need its own migration.
+  totpSecret String?
 
   customer Customer?
   driver   Driver?
   // employee relation added once Employee lands (Sprint 9+)
 
-  accounts Account[]
-  sessions Session[]
+  accounts      Account[]
+  sessions      Session[]
+  recoveryCodes RecoveryCode[]
 
   // Not unique — phone is deliberately never a merge/lookup key for
   // customer resolution (see docs/DECISIONS.md's saveOrder entry), only
@@ -114,6 +147,22 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// NEW — Sprint 5 PR1. Hashed, single-use MFA recovery codes
+// (SECURITY_ARCHITECTURE.md §4.2), generated at TOTP enrollment.
+// Enrollment/consumption logic lands in a later Sprint 5 PR; this PR only
+// adds the table.
+model RecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------
