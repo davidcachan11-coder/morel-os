@@ -15,7 +15,7 @@ import {
 export default async function AdminIngresarPage() {
   const session = await auth();
   if (session?.user) {
-    redirect("/admin");
+    redirect(session.user.mustChangePassword ? "/admin/cambiar-contrasena" : "/admin");
   }
 
   async function signInWithCredentials(formData: FormData) {

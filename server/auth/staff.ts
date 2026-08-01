@@ -15,7 +15,11 @@ const STAFF_SESSION_MAX_AGE_SECONDS = 60 * 60 * 8;
 // default (4 MiB memory) is below OWASP's current Password Storage Cheat
 // Sheet baseline for Argon2id (>=19 MiB). Algorithm defaults to Argon2id
 // already (the library's own recommended default), left unspecified here.
-const ARGON2_OPTIONS = { memoryCost: 19456, timeCost: 2, parallelism: 1 };
+// Exported so app/admin/cambiar-contrasena's password-change action hashes
+// with the exact same parameters (prisma/bootstrap-admin.ts duplicates
+// this constant instead of importing it, since it runs outside Next's
+// bundler and this module has a server-only guard).
+export const ARGON2_OPTIONS = { memoryCost: 19456, timeCost: 2, parallelism: 1 };
 
 // A fixed, validly-formatted (but unreachable) hash, verified against on
 // every failed lookup so `authorize()` always pays argon2's real cost
@@ -99,7 +103,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const valid = await verify(hashToVerify, password, ARGON2_OPTIONS);
         if (!eligible || !valid || !user) return null;
 
-        return { id: user.id, email: user.email, name: user.name };
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          mustChangePassword: user.mustChangePassword,
+        };
       },
     }),
   ],
@@ -117,18 +126,28 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         });
         token.sessionToken = sessionToken;
         token.id = user.id;
+        token.mustChangePassword = user.mustChangePassword ?? false;
         return token;
       }
 
       if (typeof token.sessionToken !== "string") return null;
+      // Re-read mustChangePassword fresh on every request, not just at
+      // sign-in — the same query already needed for revocation (below)
+      // also carries this, so a password change (app/admin/cambiar-contrasena)
+      // takes effect on the very next request with no re-login required.
       const dbSession = await prisma.session.findUnique({
         where: { sessionToken: token.sessionToken },
+        include: { user: { select: { mustChangePassword: true } } },
       });
       if (!dbSession || dbSession.expires < new Date()) return null;
+      token.mustChangePassword = dbSession.user.mustChangePassword;
 
       return token;
     },
     async session({ session, token }) {
+      if (session.user && typeof token.mustChangePassword === "boolean") {
+        session.user.mustChangePassword = token.mustChangePassword;
+      }
       if (session.user && typeof token.id === "string") {
         session.user.id = token.id;
       }

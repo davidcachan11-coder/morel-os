@@ -1310,3 +1310,90 @@ the cookie and deletes the `Session` row; manually deleting a `Session`
 row invalidates that session on the next request; `bootstrap:admin` is
 idempotent (verified by running it twice); `/admin` and the customer
 instance both confirmed unaffected.
+
+---
+
+## 2026-08-01 — Sprint 5 PR4: mustChangePassword enforcement and /admin route protection
+
+**Decision:** Close the two gaps PR3 explicitly flagged as deferred:
+`mustChangePassword` is now enforced, and `/admin` is no longer public.
+`/admin` (and any future page added alongside it) is protected by
+`app/admin/(app)/layout.tsx` — a route-group layout, not a blanket
+`app/admin/layout.tsx`. `/admin/ingresar` and the new
+`/admin/cambiar-contrasena` deliberately live outside that group, as
+siblings: Next.js route groups add no URL segment (confirmed against
+`next/dist/docs/.../route-groups.md` before building, not assumed), so
+`/admin`'s URL is unchanged, but a signed-out visitor hitting
+`/admin/ingresar` no longer gets caught by the same check it needs to
+reach in order to sign in — a single shared layout would have created an
+infinite redirect loop on its own sign-in page.
+
+**How `mustChangePassword` is enforced:** the `jwt` callback already
+re-queries the `Session` table on every request for revocation (PR3) —
+extended that same query to also select the linked `User.mustChangePassword`,
+so the value the gate sees is always the current database state, never a
+stale sign-in-time snapshot. `app/admin/(app)/layout.tsx` redirects to
+`/admin/ingresar` if unauthenticated, then to `/admin/cambiar-contrasena`
+if `mustChangePassword` is still true. That page requires authentication
+but is explicitly *not* inside the protected group (it's reachable
+precisely because `mustChangePassword` is true); it itself redirects to
+`/admin` if `mustChangePassword` is already false, since it's a one-time
+forced flow, not a general self-service "change my password" page.
+Verified end-to-end: signed in with the bootstrap password, confirmed
+`/admin` redirected to the change page rather than looping or granting
+access; submitted a new password; confirmed the DB flag cleared and the
+very next request to `/admin` succeeded with no re-login; confirmed the
+old password now fails and the new one succeeds.
+
+**Scope boundaries, deliberate, matching what was asked:**
+- Any successfully authenticated staff session — any non-`CUSTOMER`
+  role — can reach `/admin`. No role-based restriction within staff
+  (`branch_staff` vs. `finance` vs. `admin`, etc.) is enforced. Only one
+  staff page exists today (Operations); building a role-authorization
+  system for a single page not yet asked to be role-scoped would be
+  speculative. Revisit once a second staff page with narrower intended
+  audience actually exists.
+- No middleware — the gate is a Server Component layout, consistent with
+  the reasoning already recorded in the original Sprint 5 architecture
+  review and unchanged by anything built since: staff sessions need a
+  Node-runtime Prisma lookup on every check, which default Edge
+  middleware can't cleanly do.
+- The password-change form asks only for the new password twice, not the
+  current one — the session used to reach it was just established by
+  authenticating with that exact password moments earlier.
+- No session rotation/invalidation of other active sessions on password
+  change. For the bootstrap admin (one person, one session) this is moot;
+  worth reconsidering once staff accounts are provisioned by other admins
+  and a compromised temporary password could plausibly have a second,
+  attacker-held session already active.
+- New-password minimum is 12 characters, length only — no composition
+  rules, consistent with current NIST 800-63B guidance over legacy
+  complexity requirements, and avoids adding an external breach-list
+  dependency.
+- No tRPC changes. `docs/BACKEND_ARCHITECTURE.md` §7's `protectedProcedure`
+  role enforcement (`server/trpc/trpc.ts`'s still-stubbed middleware) is
+  unrelated to Next.js route protection and remains a separate, later PR
+  — this one only gates page navigation, not the tRPC API surface `/admin`'s
+  components call into.
+
+**Customer/staff isolation, verified rather than assumed:** the two
+Auth.js instances use entirely separate cookie names
+(`morel.customer.*` / `morel.staff.*`). Confirmed a request carrying only
+a (fake) `morel.customer.session-token` cookie still gets redirected to
+`/admin/ingresar` — there is no code path where a customer session could
+be mistaken for a staff one, by construction, not by an explicit
+role-equality check that could be gotten wrong.
+
+**Verification performed:** typecheck, lint, `npm audit` gate (unchanged),
+production build — `/admin` correctly flipped from static to dynamic
+(expected and correct now that it's genuinely gated, unlike the
+unjustified regression caught and reverted in PR2). Runtime: unauthenticated
+requests to `/admin` and `/admin/cambiar-contrasena` both redirect to
+`/admin/ingresar`; the full sign-in → forced-change → dashboard flow was
+exercised through the actual rendered pages in a real browser session
+(not just direct HTTP) after browser-click automation proved unreliable
+against the `/admin/ingresar` form specifically in this environment — a
+fresh accessibility-tree read immediately before each click consistently
+resolved it; old/new password behavior confirmed via direct HTTP
+afterward for determinism. `/`, `/tienda`, the customer Auth.js instance,
+and the customer-cookie-isolation check all confirmed unaffected.
