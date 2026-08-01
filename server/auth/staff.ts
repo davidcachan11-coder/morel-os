@@ -5,8 +5,14 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { hash, verify } from "@node-rs/argon2";
-import type { Role } from "@prisma/client";
+import type { Role, User } from "@prisma/client";
 import { prisma } from "@/server/db/client";
+import {
+  consumeRecoveryCode,
+  decryptTotpSecret,
+  staffRoleRequiresMfa,
+  verifyTotpToken,
+} from "@/server/auth/mfa";
 
 // Absolute session lifetime. A placeholder initial value (roughly one work
 // shift) — real idle-timeout/sliding-renewal policy (SECURITY_ARCHITECTURE.md
@@ -32,6 +38,39 @@ export const ARGON2_OPTIONS = { memoryCost: 19456, timeCost: 2, parallelism: 1 }
 // emails. Generated once at module load from a random value never used
 // as a real password.
 const DUMMY_HASH_PROMISE = hash(randomUUID(), ARGON2_OPTIONS);
+
+/**
+ * Verifies a staff email/password pair, timing-safe against every failure
+ * mode (see DUMMY_HASH_PROMISE above) — the shared core of authorize()
+ * below, also used by app/admin/ingresar's pre-check server action so it
+ * can decide whether to show the second-factor step without duplicating
+ * this logic (and without duplicating its timing-safety properties, which
+ * are easy to accidentally lose in a second implementation).
+ *
+ * Returns the full `User` row on success so callers can inspect role/MFA
+ * state; returns `null` on any failure (no row, wrong password, customer
+ * role, no password set).
+ */
+export async function verifyStaffPassword(
+  email: string,
+  password: string
+): Promise<User | null> {
+  const user = await prisma.user.findUnique({ where: { email } });
+
+  let hashToVerify: string;
+  let eligible: boolean;
+  if (user && user.passwordHash && user.role !== "CUSTOMER") {
+    hashToVerify = user.passwordHash;
+    eligible = true;
+  } else {
+    hashToVerify = await DUMMY_HASH_PROMISE;
+    eligible = false;
+  }
+
+  const valid = await verify(hashToVerify, password, ARGON2_OPTIONS);
+  if (!eligible || !valid || !user) return null;
+  return user;
+}
 
 /**
  * Staff-facing Auth.js instance (BACKEND_ARCHITECTURE.md §6): credentials
@@ -95,6 +134,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Contraseña", type: "password" },
+        // Only one of these is ever sent by app/admin/ingresar's second
+        // step — whichever the user chose (authenticator code vs. recovery
+        // code) — see SECURITY_ARCHITECTURE.md §4.2.
+        totpCode: { label: "Código de verificación", type: "text" },
+        recoveryCode: { label: "Código de recuperación", type: "text" },
       },
       async authorize(credentials) {
         const email =
@@ -103,33 +147,43 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           typeof credentials?.password === "string"
             ? credentials.password
             : null;
+        const totpCode =
+          typeof credentials?.totpCode === "string" &&
+          credentials.totpCode.trim()
+            ? credentials.totpCode.trim()
+            : null;
+        const recoveryCode =
+          typeof credentials?.recoveryCode === "string" &&
+          credentials.recoveryCode.trim()
+            ? credentials.recoveryCode.trim()
+            : null;
         if (!email || !password) return null;
 
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = await verifyStaffPassword(email, password);
+        if (!user) return null;
 
-        // Fail closed: no row, no password set (every customer row — the
-        // customer instance never sets passwordHash), or a customer role
-        // caught by this login surface some other way — none of these
-        // authenticate here. The role check is a deliberate second,
-        // redundant gate on top of "has a passwordHash at all"
-        // (SECURITY_ARCHITECTURE.md §2's "defense in depth").
-        //
-        // Always verify against *something* — the real hash when the row
-        // could possibly be a valid staff login, the fixed dummy hash
-        // otherwise — so this function takes the same time either way and
-        // doesn't leak which staff emails exist via response timing.
-        let hashToVerify: string;
-        let eligible: boolean;
-        if (user && user.passwordHash && user.role !== "CUSTOMER") {
-          hashToVerify = user.passwordHash;
-          eligible = true;
-        } else {
-          hashToVerify = await DUMMY_HASH_PROMISE;
-          eligible = false;
+        // SECURITY_ARCHITECTURE.md §4.2: an admin/finance/ops_manager
+        // account that has completed MFA enrollment MUST clear a second
+        // factor at every login. An account in one of those roles that
+        // hasn't enrolled yet is intentionally let through here — it's
+        // blocked from reaching anything except the enrollment page by
+        // app/admin/(app)/layout.tsx instead, the same pattern already
+        // used for mustChangePassword (see docs/DECISIONS.md's MFA entry
+        // for why: enrollment itself needs an authenticated context to
+        // bind the QR code to the right account).
+        if (staffRoleRequiresMfa(user.role) && user.mfaEnabled) {
+          if (!user.totpSecret) return null; // fail closed — inconsistent state, never trust it
+          let secondFactorOk = false;
+          if (recoveryCode) {
+            secondFactorOk = await consumeRecoveryCode(user.id, recoveryCode);
+          } else if (totpCode) {
+            secondFactorOk = verifyTotpToken(
+              decryptTotpSecret(user.totpSecret),
+              totpCode
+            );
+          }
+          if (!secondFactorOk) return null;
         }
-
-        const valid = await verify(hashToVerify, password, ARGON2_OPTIONS);
-        if (!eligible || !valid || !user) return null;
 
         return {
           id: user.id,
@@ -137,6 +191,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           name: user.name,
           mustChangePassword: user.mustChangePassword,
           role: user.role,
+          mfaEnabled: user.mfaEnabled,
         };
       },
     }),
@@ -157,22 +212,26 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.id = user.id;
         token.mustChangePassword = user.mustChangePassword ?? false;
         token.role = user.role;
+        token.mfaEnabled = user.mfaEnabled ?? false;
         return token;
       }
 
       if (typeof token.sessionToken !== "string") return null;
-      // Re-read mustChangePassword/role fresh on every request, not just at
-      // sign-in — the same query already needed for revocation (below)
-      // also carries these, so a password change or role change
-      // (app/admin/cambiar-contrasena; a future role-management procedure)
-      // takes effect on the very next request with no re-login required.
+      // Re-read mustChangePassword/role/mfaEnabled fresh on every request,
+      // not just at sign-in — the same query already needed for revocation
+      // (below) also carries these, so a password change, role change, or
+      // completed MFA enrollment (app/admin/configurar-mfa) takes effect on
+      // the very next request with no re-login required.
       const dbSession = await prisma.session.findUnique({
         where: { sessionToken: token.sessionToken },
-        include: { user: { select: { mustChangePassword: true, role: true } } },
+        include: {
+          user: { select: { mustChangePassword: true, role: true, mfaEnabled: true } },
+        },
       });
       if (!dbSession || dbSession.expires < new Date()) return null;
       token.mustChangePassword = dbSession.user.mustChangePassword;
       token.role = dbSession.user.role;
+      token.mfaEnabled = dbSession.user.mfaEnabled;
 
       return token;
     },
@@ -182,6 +241,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       }
       if (session.user && typeof token.role === "string") {
         session.user.role = token.role as Role;
+      }
+      if (session.user && typeof token.mfaEnabled === "boolean") {
+        session.user.mfaEnabled = token.mfaEnabled;
       }
       if (session.user && typeof token.id === "string") {
         session.user.id = token.id;

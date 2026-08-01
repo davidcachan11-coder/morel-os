@@ -18,6 +18,8 @@ declare module "next-auth" {
       mustChangePassword?: boolean;
       /** Staff instance only — never set on a customer session. */
       role?: Role;
+      /** Staff instance only — never set on a customer session. */
+      mfaEnabled?: boolean;
     } & DefaultSession["user"];
   }
 
@@ -26,5 +28,7 @@ declare module "next-auth" {
     mustChangePassword?: boolean;
     /** Returned by the staff instance's authorize() only. */
     role?: Role;
+    /** Returned by the staff instance's authorize() only. */
+    mfaEnabled?: boolean;
   }
 }
