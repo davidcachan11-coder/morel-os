@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ShoppingCart, LayoutDashboard, User } from "lucide-react";
+import { ShoppingCart, User } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { useCartStore, cartCount } from "@/lib/cart-store";
@@ -11,7 +11,6 @@ import { cn } from "@/lib/utils";
 const navLinks = [
   { href: "/", label: "Inicio" },
   { href: "/tienda", label: "Tienda" },
-  { href: "/admin", label: "Panel", icon: LayoutDashboard },
 ];
 
 export function SiteHeader() {

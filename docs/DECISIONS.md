@@ -1600,3 +1600,33 @@ forced-password-change → dashboard flow was re-verified end-to-end in an
 actual browser session, in the customer-then-staff order that previously
 broke; customer instance endpoints (`session`, `providers`, `csrf`, the
 `/cuenta/ingresar` page) all confirmed unaffected throughout.
+
+---
+
+## 2026-08-01 — Remove admin entry points from the public UI
+
+**Decision:** Removed the two links exposing `/admin` from customer-facing
+navigation: `components/site-header.tsx`'s `navLinks` array (a "Panel"
+entry, plus its now-unused `LayoutDashboard` icon import) and
+`components/site-footer.tsx`'s "Panel de operaciones" footer link. Found
+by grepping every `.tsx` file for `/admin` references outside `app/admin/`
+itself — exactly these two, confirmed exhaustive.
+
+**Why:** `/admin` gaining real authentication (Sprint 5 PR3/PR4) didn't
+retroactively remove the links to it that were added back when the demo
+had no auth and no reason to hide them. A customer was never meant to
+discover the staff application through the storefront's own navigation.
+
+**Not touched, deliberately:** `/admin` itself remains directly reachable
+by URL — this is a UI-discoverability fix, not a new access-control
+layer; the existing auth/route protection (PR3, PR4) is unchanged.
+`app/admin/(app)/page.tsx`'s own on-page heading ("Panel de operaciones")
+and the landing page's marketing copy describing operational features
+("Panel con KPIs...") are not links and are not entry points — left as
+they are.
+
+**Verification performed:** typecheck, lint, build all clean, identical
+route set to before (confirming no functional change, only two UI
+references removed). Browser-verified: the header and footer no longer
+show any admin link on `/` or `/tienda`; `/admin` still redirects to
+`/admin/ingresar` exactly as before when unauthenticated.

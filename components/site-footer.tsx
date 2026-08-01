@@ -15,7 +15,6 @@ export function SiteFooter() {
         <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-muted-foreground">
           <Link href="/" className="hover:text-foreground">Inicio</Link>
           <Link href="/tienda" className="hover:text-foreground">Tienda</Link>
-          <Link href="/admin" className="hover:text-foreground">Panel de operaciones</Link>
         </div>
       </div>
       <div className="border-t border-border/70 px-4 py-4 text-center text-xs text-muted-foreground sm:px-6 lg:px-8">
