@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ShoppingCart, LayoutDashboard } from "lucide-react";
+import { ShoppingCart, LayoutDashboard, User } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { useCartStore, cartCount } from "@/lib/cart-store";
@@ -55,6 +55,16 @@ export function SiteHeader() {
               </Button>
             </Link>
           )}
+          <Link href="/cuenta">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hidden items-center gap-2 sm:inline-flex"
+            >
+              <User className="h-4 w-4" />
+              Mi cuenta
+            </Button>
+          </Link>
           <Button
             variant="outline"
             size="icon"

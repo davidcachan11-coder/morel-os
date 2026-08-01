@@ -1043,3 +1043,149 @@ these affect PR1's schema-only scope.
 until the PRs that implement credentials login and MFA enrollment land —
 accepted, matching the same trade-off Sprint 3 already made landing the
 rest of the identity schema two sprints ahead of its logic.
+
+---
+
+## 2026-08-01 — Sprint 5 PR2: customer Auth.js instance (Google + magic link, JWT sessions)
+
+**Decision:** Land the first of the two Auth.js instances described in
+`docs/BACKEND_ARCHITECTURE.md` §6 — the customer-facing one. `next-auth@5.0.0-beta.32`
++ `@auth/prisma-adapter@2.11.3` (`server/auth/customer.ts`), mounted at
+`basePath: "/api/auth/customer"` with a `morel.customer.*` cookie prefix so
+the staff instance (PR3 — credentials, database sessions) can be added
+later with zero collision risk. Providers: Google OAuth and Auth.js's
+built-in `Resend` email provider (`next-auth/providers/resend` — a thin
+`fetch` to Resend's API, no extra SDK dependency; matches the vendor
+already chosen in `docs/BACKEND_ARCHITECTURE.md` §1). Session strategy is
+explicit `jwt`, overriding Auth.js's adapter-implies-database default.
+Pages: `/cuenta/ingresar` (sign-in) and `/cuenta` (signed-in state,
+sign-out) — no order history, no profile editing; this PR proves the auth
+mechanism works, not a full account dashboard.
+
+**Compatibility verified before adoption, not assumed:** `next-auth@5.0.0-beta.32`'s
+own peer dependencies declare `next: "^12.2.5 || ^13 || ^14 || ^15 || ^16"`
+and `react: "^17 || ^18 || ^19"` — officially supports this app's Next 16
+/ React 19, checked against the npm registry directly rather than trusting
+training-data familiarity with Auth.js v5, given `AGENTS.md`'s standing
+warning about this Next.js version. `npm audit` after installing both
+packages surfaces zero new advisories — the one `next-auth` finding
+`npm audit` reports is the same `next`-internal `postcss`/`sharp` chain
+already investigated and allowlisted by GHSA ID in the Sprint 3 CI-audit
+entry, now also reachable via one more dependency path; `.github/scripts/check-npm-audit.mjs`
+matches by GHSA ID (not package name), so it required no changes and
+still passes clean.
+
+**A real blocker, found and resolved within this PR (no PR1 schema
+change):** Auth.js's standard `PrismaAdapter.createUser` calls
+`prisma.user.create()` without a `role`, but `User.role` is required with
+no default — a brand-new sign-up (never having gone through Sprint 4's
+guest checkout) would violate that NOT NULL constraint. Fixed with a thin
+wrapper around `PrismaAdapter` that overrides only `createUser` to inject
+`role: "CUSTOMER"` (this instance is never used for staff sign-in, so the
+default is always correct) — contained entirely in `server/auth/customer.ts`,
+verified directly against the local dev database (a standalone script
+exercising the same create-and-strip-Auth.js's-id logic, confirming
+`role` defaults correctly and Prisma's own `cuid()` is used instead of
+Auth.js's generated id, then cleaned up).
+
+**`allowDangerousEmailAccountLinking: true` on the Google provider only**
+(not global, not on the Resend provider — which doesn't have this option
+and doesn't need it). Sprint 4's guest checkout auto-creates a `User` by
+email with no `Account` row; without this flag, a later Google sign-in
+for that same email would hit Auth.js's default `OAuthAccountNotLinked`
+rejection.
+
+*Why this is actually safe here, not just convenient:* the flag's name
+reflects a real, general risk — if some sign-up path lets anyone claim an
+arbitrary, **unverified** email and attach a **credential** to it (a
+password, an API key, anything that grants standing access), then
+auto-linking a later, *real* owner's OAuth sign-in to that same row can
+hand the attacker passive access to whatever the real owner does next,
+or let an attacker who got there first retain a way back in after
+linking. That specific mechanism requires two things to both be true:
+(1) an attacker can plant a row under a victim's email before the victim
+signs in for real, **and** (2) that planted row carries some way for the
+attacker to authenticate as it, before or after linking. In this app,
+(1) is trivially possible — anyone can type any email into guest
+checkout — but (2) is not: Sprint 4's guest checkout never sets
+`User.passwordHash`, never creates an `Account` row, and grants no
+session or credential of any kind. There is no way for whoever typed an
+email into checkout to ever authenticate as that row, before or after a
+real owner links their Google account to it. Linking only ever grants
+access to whoever can currently prove, through Google's own OAuth
+consent flow, that they own that email — never to whoever merely typed
+it into a form earlier.
+
+*Assumptions this relies on, which future changes must not silently
+break:*
+- Guest checkout (or any other unauthenticated flow) never gains a way
+  to set a credential on a `User` row without proving email ownership
+  first. If a future change adds one — e.g., a password-reset-like flow,
+  or a staff-provisioning path that overlaps with customer identities —
+  this reasoning must be re-checked for that path specifically before
+  this flag is assumed to still be safe.
+- Google's OAuth consent flow continues to verify the email it asserts
+  (true for the `email`/`profile` scopes used here — this is Google's
+  behavior, not something this app controls, and would need re-checking
+  only if the provider or scopes ever change).
+- This setting is scoped to the Google provider on the *customer*
+  Auth.js instance only. It must not be copied onto a future OAuth
+  provider (customer or staff) without this same analysis being redone
+  for that provider's own guarantees — enabling it is a per-provider
+  decision, not a policy that generalizes automatically.
+
+*Trade-offs, accepted:*
+- A guest checkout placed under someone else's real email still creates
+  an order-history row that becomes visible to that email's real owner
+  once they sign in and link — this is a pre-existing guest-checkout-fraud
+  possibility independent of this flag (anyone could already type anyone's
+  email into checkout before Sprint 5 existed), not something this flag
+  introduces. If anything, linking is a mild net positive for the real
+  customer: a fraudulent order in their name becomes visible as theirs
+  instead of only reachable via the tracking link.
+- If the first assumption above is ever violated, this flag stops being
+  safe and must be revisited (narrowed, or replaced with an explicit
+  confirmation step before linking) — not left enabled on the strength of
+  reasoning that no longer holds.
+
+**Known, accepted gap:** account-linking a guest-created `User` to a real
+Google sign-in calls the adapter's `linkAccount`, not `createUser` — so
+the new-user `emailVerified` stamping logic in this PR's Google `profile()`
+callback doesn't retroactively mark an already-existing, newly-linked
+row's email as verified. Not load-bearing anywhere in this PR (nothing
+gates on `emailVerified` yet); left as a follow-up rather than expanding
+this PR's scope with a custom `signIn` callback for a field nothing reads
+yet.
+
+**Rejected: passing session/sign-in state through the root layout to show
+"Ingresar"/"Mi cuenta" in the header.** Initially implemented (`auth()` in
+`app/layout.tsx`, a `userEmail` prop on `SiteHeader`), then reverted after
+`npm run build` showed it made **every route in the app dynamic** — `/`,
+`/admin`, `/tienda`, and `/tienda/checkout` all flipped from statically
+prerendered to server-rendered-on-demand, since the root layout wraps
+every route and `auth()` reads cookies. That cost isn't justified by a
+header nicety that isn't essential to proving customer auth works — `/cuenta`
+and `/cuenta/ingresar` already exercise the full flow independently, and
+already self-redirect based on session state. The header now links
+unconditionally to `/cuenta`, which redirects to `/cuenta/ingresar` for a
+signed-out visitor — same effective UX, zero static-rendering cost.
+Revisit only if a real reason to show session state elsewhere emerges
+(e.g., via a client-side fetch against the adapter's own `/session`
+endpoint, which doesn't require server-side `auth()` in the layout).
+
+**Verification scope, stated explicitly:** no real `AUTH_GOOGLE_ID/SECRET`
+or `RESEND_API_KEY` exist in this environment, and this session has no way
+to create them (that requires the project owner's Google Cloud / Resend
+accounts). Both providers were exercised end-to-end up to the point where
+real third-party credentials would be required: Google's OAuth attempt
+correctly surfaced Auth.js's own "Configuration" error page (HTTP 500 by
+Auth.js's own design for this error class, generic safe message, no
+internals leaked) after failing at the OIDC discovery fetch; the magic-link
+attempt hit the same "Configuration" path for the missing `RESEND_API_KEY`.
+Both are correct, fail-closed behavior for an unconfigured provider, not
+bugs — confirmed by inspecting the dev server's own log output and by
+directly curling `/api/auth/customer/{providers,csrf,session}`, all of
+which respond correctly. A real OAuth/magic-link round-trip remains to be
+verified once real credentials exist (Preview Deployment, per the Sprint
+3 "Preview Deployments only" decision, is the natural first place this
+happens for real).
