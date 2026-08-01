@@ -1630,3 +1630,104 @@ route set to before (confirming no functional change, only two UI
 references removed). Browser-verified: the header and footer no longer
 show any admin link on `/` or `/tienda`; `/admin` still redirects to
 `/admin/ingresar` exactly as before when unauthenticated.
+
+---
+
+## 2026-08-01 — Sprint 5: real tRPC session/role context and `protectedProcedure`
+
+**Decision:** `server/trpc/context.ts` now derives a real, normalized
+session from the two Auth.js instances, and `server/trpc/trpc.ts`'s
+`protectedProcedure` is real middleware instead of the Sprint 3 stub that
+always threw `NOT_IMPLEMENTED`. Scope held to exactly this: no existing
+router's visibility changed (`catalog`, `delivery`, and every `orders`
+procedure remain `publicProcedure`, correctly — none of them were ever
+meant to require auth), no `branchId` scoping, no permanent new
+procedure.
+
+**Context normalization:** `createContext` calls `auth()` from both
+`server/auth/staff.ts` and `server/auth/customer.ts` (via `Promise.all`,
+not sequentially) and produces one `session: { userId, role } | null` on
+context. Staff is checked first; a customer session's role is hardcoded
+to `CUSTOMER` rather than threaded through the customer session the way
+`role` is threaded through the staff one — `server/auth/customer.ts`'s
+adapter only ever creates `CUSTOMER`-role users, so there is nothing to
+derive and nothing that could drift. The two Auth.js instances remain
+otherwise untouched and unaware of each other.
+
+**Necessary prerequisite, not scope creep:** the staff session carried no
+`role` at all before this PR — `authorize()`, and the `jwt`/`session`
+callbacks, only ever threaded `id`/`mustChangePassword`. Without `role`
+on the session, `protectedProcedure`'s role check has nothing to check
+against. Added following the exact same pattern already used for
+`mustChangePassword`: `authorize()` returns it, the `jwt` callback's
+fresh-sign-in branch sets it from the just-authenticated `user`, the
+existing-session branch re-reads it fresh from the database on every
+request (extending the same query already fetching `mustChangePassword`
+for revocation), and the `session` callback copies it onto `session.user`.
+No new database query was added — `role` rides along with the query
+already required for PR3's revocation check.
+
+**`protectedProcedure(...roles)`:** `UNAUTHORIZED` if `ctx.session` is
+null, checked before any role logic runs. If `roles` is non-empty and
+`ctx.session.role` isn't among them, `FORBIDDEN`. `protectedProcedure()`
+with zero arguments means "any authenticated session, any role" — still
+requires a real session, just not a specific one. The middleware
+re-injects `ctx.session` (now narrowed non-null by the check above) via
+`next({ ctx: { ...ctx, session: ctx.session } })`, the standard tRPC
+pattern for propagating a narrowed context type to downstream procedures.
+
+**`branchId` scoping — still deliberately not built**, re-confirmed
+rather than silently revisited: `SECURITY_ARCHITECTURE.md` §4.3 requires
+it for branch-scoped procedures, but none exist yet, and no staff
+`branchId` field exists on `User` to derive it from (`Employee.branchId`
+remains deferred to Sprint 9+). Building scoping logic for a second
+branch that doesn't exist would be speculative.
+
+**Known, accepted performance cost — evaluated and explicitly kept as-is,
+not silently fixed:** `createContext` now calls both instances' `auth()`
+on *every* tRPC request, including ones routed to `publicProcedure` that
+never read `ctx.session` at all — e.g. the order tracker's
+`getOrderStatus` polling every 5 seconds. The staff instance's `auth()`
+does a `Session` table lookup on every call (PR3's revocation design),
+so this adds one otherwise-unnecessary database round-trip to every
+public tRPC call. Not a security issue — a resource-usage trade-off,
+reviewed and consciously accepted rather than fixed in this PR:
+
+- The current approach prioritizes simplicity and a single, normalized
+  context shape every procedure can rely on uniformly — no conditional
+  session-loading logic, no per-procedure awareness of whether it needs
+  auth or not.
+- Public procedures remain functionally unaffected — the extra query
+  costs latency/database load, not correctness; `catalog`, `delivery`,
+  and every `orders` procedure behave identically to before this PR.
+- A future optimization can introduce lazy session resolution (only
+  calling `auth()` when a procedure that actually reads `ctx.session` is
+  invoked) or route-specific context loading, if real tRPC traffic
+  volume ever makes this cost worth removing — not built speculatively
+  here, since nothing today indicates it's actually a bottleneck.
+
+**Verification performed:**
+- Typecheck, lint, build all clean, identical route/static-dynamic split
+  to before.
+- Middleware logic verified in isolation: a temporary, uncommitted script
+  built its own minimal router using the exact same `protectedProcedure`
+  logic (not imported — copied inline so the script has no dependency on
+  `server-only` modules) and exercised 11 cases via tRPC's `createCaller`
+  against constructed contexts — no session, customer session, and
+  several staff roles, against `protectedProcedure()`,
+  `protectedProcedure("ADMIN")`, and `protectedProcedure("ADMIN",
+  "OPS_MANAGER")`. All 11 passed (`UNAUTHORIZED` with no session,
+  `FORBIDDEN` for a session with the wrong role, success for the right
+  one or no requirement). Script deleted after.
+- `createContext` verified against real cookies inside the actual Route
+  Handler (not just the isolated logic above): a temporary `_debugSession.whoAmI`
+  procedure was added directly to `server/trpc/root.ts`, returning
+  `ctx.session` — confirmed `null` with no cookies, and `{userId,
+  role: "ADMIN"}` after a real staff sign-in, over live HTTP. Removed
+  before finishing; `git diff` on `root.ts` shows zero net change.
+- Regression: `catalog.listCategories`, `delivery.listDeliverySlots`, and
+  `orders.getOrder` all still return `200` with no session, confirming
+  `protectedProcedure` becoming real didn't affect any `publicProcedure`
+  router. Full browser regression: sign-in → `/admin` dashboard renders
+  with zero console errors; `/tienda`, `/`, and unauthenticated `/admin`
+  → `/admin/ingresar` all behave exactly as before.

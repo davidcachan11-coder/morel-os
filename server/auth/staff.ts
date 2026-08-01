@@ -5,6 +5,7 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { hash, verify } from "@node-rs/argon2";
+import type { Role } from "@prisma/client";
 import { prisma } from "@/server/db/client";
 
 // Absolute session lifetime. A placeholder initial value (roughly one work
@@ -135,6 +136,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           email: user.email,
           name: user.name,
           mustChangePassword: user.mustChangePassword,
+          role: user.role,
         };
       },
     }),
@@ -154,26 +156,32 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.sessionToken = sessionToken;
         token.id = user.id;
         token.mustChangePassword = user.mustChangePassword ?? false;
+        token.role = user.role;
         return token;
       }
 
       if (typeof token.sessionToken !== "string") return null;
-      // Re-read mustChangePassword fresh on every request, not just at
+      // Re-read mustChangePassword/role fresh on every request, not just at
       // sign-in — the same query already needed for revocation (below)
-      // also carries this, so a password change (app/admin/cambiar-contrasena)
+      // also carries these, so a password change or role change
+      // (app/admin/cambiar-contrasena; a future role-management procedure)
       // takes effect on the very next request with no re-login required.
       const dbSession = await prisma.session.findUnique({
         where: { sessionToken: token.sessionToken },
-        include: { user: { select: { mustChangePassword: true } } },
+        include: { user: { select: { mustChangePassword: true, role: true } } },
       });
       if (!dbSession || dbSession.expires < new Date()) return null;
       token.mustChangePassword = dbSession.user.mustChangePassword;
+      token.role = dbSession.user.role;
 
       return token;
     },
     async session({ session, token }) {
       if (session.user && typeof token.mustChangePassword === "boolean") {
         session.user.mustChangePassword = token.mustChangePassword;
+      }
+      if (session.user && typeof token.role === "string") {
+        session.user.role = token.role as Role;
       }
       if (session.user && typeof token.id === "string") {
         session.user.id = token.id;
