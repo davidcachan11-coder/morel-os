@@ -1883,3 +1883,140 @@ this PR's scope unilaterally.
     whole session, both matching the two intentional negative-path tests
     above (wrong TOTP, reused recovery code) — no unexpected server-side
     errors anywhere in the flow.
+
+---
+
+## 2026-08-02 — Admin Platform: shell, analyticsRouter, and the Executive Dashboard
+
+**Decision:** Replace the Sprint 3 mock `/admin` page (`data/admin.ts`'s
+hardcoded KPIs and seeded kanban) with a real admin platform foundation:
+a persistent sidebar/header shell for every future `/admin/*` module, a
+new `analyticsRouter` of real, database-backed reporting queries, and a
+fully data-driven Executive Dashboard. Scoped in three passes — shell +
+dashboard + analytics page, then dashboard completion (alerts, branch
+performance, recent activity, pipeline), then this polish pass (empty
+states, cross-navigation) — landing as one commit.
+
+**Router placement — `analyticsRouter`, not folded into existing
+routers.** `BACKEND_ARCHITECTURE.md` §8/§9's router list has no
+dedicated analytics router; confirmed with the project owner before
+building rather than assumed. Reporting queries are inherently
+cross-domain (`Order` + `OrderItem` + `Product` + `Customer`), so folding
+them into `ordersRouter` or `catalog.ts` would blur those routers' actual
+purpose. Every procedure is `protectedProcedure()` with no role
+restriction — `SECURITY_ARCHITECTURE.md` §5.1 classifies aggregate KPIs
+as "Internal: staff-authenticated access only," not role-restricted, so
+that's what's implemented rather than an invented stricter gate.
+
+**Server Components call tRPC directly, no `@trpc/tanstack-react-query`
+added.** `docs/DECISIONS.md`'s 2026-07-31 tRPC client-architecture entry
+explicitly named "admin dashboard live KPIs" as the trigger for a second
+tRPC access pattern, additive to the vanilla browser client. That
+moment arrived: `server/trpc/caller.ts` wraps
+`appRouter.createCaller(await createContext())` so Server Components
+call procedures in-process, no HTTP round trip, no client-side cache
+needed since these are server-rendered on every request. Period/branch
+filters are plain URL search params (`?period=…&branch=…`) driving
+Server Component re-renders via `<Link>`, the same pattern
+`app/admin/cambiar-contrasena`'s `?error=` already used — no client
+state library, no new dependency.
+
+**Data reality, checked against the live database before building
+anything, not assumed:**
+- Revenue, order count, AOV, customer count, order-status counts: fully
+  real, all 20 seeded orders have valid `total`.
+- Product/category-level revenue: real query, thin data — only 1 of 20
+  seeded orders has actual `OrderItem` rows (the rest are `Order`-level
+  totals only, a seed-data fact). Revenue there is an *estimate*
+  (quantity × current `Product.price` — `OrderItem` doesn't snapshot
+  price at order time), ranked by quantity (exact) as the primary
+  signal, revenue labeled as secondary.
+- Cancelled orders: **not trackable** — `OrderStatus` has no cancellation
+  state in the schema. Always shown as "N/D (no rastreado)," never a
+  fabricated `0`.
+- Delivery/fulfillment timing: zero `Delivery` rows exist — not built,
+  no placeholder metric invented.
+- Inventory: no `InventoryItem`/`InventoryMovement` model exists at all —
+  `/admin/inventario` is structure-only with an explicit note on what
+  backend work is required, per the approved scope (Phase 1 nav
+  placeholders, not empty routers — no `inventoryRouter` file exists
+  either, matching `root.ts`'s existing "a router lands the moment it has
+  a real procedure" discipline).
+- Branch filtering is real, not speculative: the seed data genuinely
+  spans 3 `Branch` rows despite the app's checkout flow only ever
+  targeting the single default branch.
+
+**Operational alerts — thresholds are labeled configuration, not
+discovered facts.** `server/analytics/alerts.ts`'s
+`STUCK_ORDER_THRESHOLD_MINUTES` (60) and
+`REVENUE_DECLINE_ALERT_THRESHOLD_PCT` (-20) have no documented SLA to
+derive them from — `DASHBOARD_SPEC.md`'s Operations section flags SLA
+breach highlighting as planned without a number. Picking a defensible
+default and saying so explicitly (in-code comment, not hidden) was
+judged better than shipping no alert at all; should become
+admin-configurable once `/admin/configuracion` is real. Every alert
+condition is a live query result, not a canned message: stuck orders
+(latest `OrderStatusEvent` older than the threshold, "right now,"
+independent of the selected period), branches with zero orders in the
+period (suppressed when *every* branch is quiet — that's "no orders
+this period," not a branch-specific anomaly), revenue decline vs. the
+previous period (only fires when a real previous-period baseline
+exists — `computeDeltaPct`'s null-on-zero-baseline contract, reused
+here rather than re-implemented).
+
+**Empty states — explicit "no activity" states, not walls of zeros.**
+When a period has zero orders, the KPI row was showing five simultaneous
+`$0`/`0` cards, which reads as a broken page rather than "nothing
+happened yet." Replaced with a single "Esperando actividad" state
+(icon + explanation) whenever `summary.orders.value === 0`; every other
+period-scoped widget (chart, pipeline, top products, branch performance)
+got the same icon + two-line treatment for visual consistency, replacing
+terser one-line messages. Caught and fixed a grammar bug in the first
+draft of this copy: interpolating `PERIOD_LABELS[period]` into "No se
+registraron pedidos en {label}" reads correctly for "este mes" but
+breaks for "hoy" ("en hoy") and the plural labels (missing "los") — fixed
+by dropping the interpolated label and matching the generic phrasing
+every sibling empty state already used.
+
+**Cross-navigation:** a "Ver analítica completa" link on the dashboard's
+sales-performance card, preserving the current period/branch as query
+params into `/admin/analitica` — the two views share the same filter
+state instead of resetting it.
+
+**Pre-existing bug found and fixed, not scope creep:** `app/layout.tsx`
+renders `<SiteHeader />` (the customer storefront's nav) unconditionally
+on every route, including `/admin/*`, since the app's first version —
+nothing had built distinct admin chrome before to expose it. Fixed in
+`components/site-header.tsx` with a pathname check (`/admin` routes
+return `null`) rather than restructuring the app into multiple Next.js
+root layouts for one conditional. `CartDrawer` needed no equivalent fix —
+it only renders visibly when opened via cart-store state, which no admin
+code path ever triggers.
+
+**Scope discipline:** `/admin/{pedidos,productos,inventario,clientes,
+usuarios,configuracion}` are nav placeholders only — each states plainly
+what already has real backend data (and where it lives) vs. what needs
+future work, never simulated data. No new modules were started beyond
+what was explicitly approved at each step.
+
+**Verification performed:**
+- `tsc --noEmit`, `eslint`, `next build` all clean at every stage, not
+  just at the end.
+- Full browser walkthrough with real login (not curl/fetch) against the
+  live database, cross-checked against direct `psql` queries: KPI values,
+  branch filtering (8 orders for Sucursal Centro, confirmed against the
+  DB), period switching, the stuck-orders alert (fired correctly once
+  seeded data aged past the threshold), the revenue-decline alert (fired
+  with a real -100% when "today" had zero orders against a real
+  "yesterday" baseline; correctly stopped firing once real elapsed time
+  moved the same fixed seed data into a two-empty-periods state — the
+  null-baseline guard suppressing it live, not by inspection), the
+  "quiet branches" alert's every-branch-quiet suppression, mobile (375px)
+  and desktop (1440px) layouts, sidebar/mobile drawer/user menu/sign-out,
+  storefront pages confirmed unaffected by the `SiteHeader` fix.
+- One tooling lesson recorded because it cost real time: this
+  environment's `get_page_text` tool result can be stale relative to the
+  actual DOM after a client-side navigation — confirmed by cross-checking
+  against `window.location.href` and DOM reads directly. Treat a
+  suspicious `get_page_text` result as unverified until cross-checked,
+  rather than concluding the app failed to navigate.

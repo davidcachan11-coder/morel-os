@@ -19,6 +19,17 @@ export function SiteHeader() {
   const openDrawer = useCartStore((s) => s.openDrawer);
   const count = cartCount(lines);
 
+  // The admin platform (app/admin/(app)/layout.tsx) has its own sidebar +
+  // header shell — this storefront header must not stack on top of it.
+  // Root layout (app/layout.tsx) renders SiteHeader unconditionally for
+  // every route, so the split happens here rather than there, to avoid
+  // restructuring the whole app into multiple root layouts for one
+  // conditional. /admin/ingresar, /admin/cambiar-contrasena, and
+  // /admin/configurar-mfa are also under /admin and correctly get no
+  // storefront header either — they're staff-only auth screens, not
+  // customer-facing.
+  if (pathname?.startsWith("/admin")) return null;
+
   return (
     <header className="sticky top-0 z-40 w-full border-b border-border/70 bg-background/85 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">

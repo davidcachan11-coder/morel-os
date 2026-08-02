@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/server/auth/staff";
 import { staffRoleRequiresMfa } from "@/server/auth/mfa";
+import { AdminSidebar } from "@/components/admin/shell/sidebar";
+import { AdminHeader } from "@/components/admin/shell/header";
 
 /**
  * Gate for every staff-only page under /admin — the Sprint 5 PR4 boundary
@@ -46,5 +48,25 @@ export default async function ProtectedAdminLayout({
     redirect("/admin/configurar-mfa");
   }
 
-  return <>{children}</>;
+  // Every real staff sign-in (server/auth/staff.ts's authorize()) sets
+  // role — this is a fail-closed guard against the field's optional type
+  // (shared with the customer session shape, which never sets it), not an
+  // expected runtime path.
+  if (!session.user.role) {
+    redirect("/admin/ingresar");
+  }
+
+  return (
+    <div className="flex min-h-svh w-full">
+      <AdminSidebar />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <AdminHeader
+          name={session.user.name ?? null}
+          email={session.user.email ?? ""}
+          role={session.user.role}
+        />
+        <main className="flex min-w-0 flex-1 flex-col">{children}</main>
+      </div>
+    </div>
+  );
 }
