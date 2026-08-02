@@ -1,6 +1,7 @@
 import type { OrderStatus } from "@prisma/client";
 import { Inbox } from "lucide-react";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency, formatRelativeTime } from "@/lib/utils";
+import { ORDER_STATUS_BADGE_CLASS, ORDER_STATUS_LABELS } from "@/components/admin/order-status-ui";
 
 export interface RecentActivityItem {
   id: string;
@@ -10,33 +11,6 @@ export interface RecentActivityItem {
   total: number;
   status: OrderStatus | null;
   createdAt: Date;
-}
-
-const STATUS_LABELS: Record<OrderStatus, string> = {
-  CONFIRMADO: "Confirmado",
-  PREPARANDO: "Preparando",
-  CONTROL_CALIDAD: "Control de calidad",
-  EN_CAMINO: "En camino",
-  ENTREGADO: "Entregado",
-};
-
-const STATUS_BADGE: Record<OrderStatus, string> = {
-  CONFIRMADO: "bg-brand-navy/10 text-brand-navy",
-  PREPARANDO: "bg-brand-orange/10 text-brand-orange-dark",
-  CONTROL_CALIDAD: "bg-brand-indigo/10 text-brand-indigo",
-  EN_CAMINO: "bg-brand-green/15 text-brand-green-dark",
-  ENTREGADO: "bg-secondary text-secondary-foreground",
-};
-
-function formatRelativeTime(date: Date): string {
-  const diffMs = Date.now() - date.getTime();
-  const minutes = Math.round(diffMs / 60_000);
-  if (minutes < 1) return "recién";
-  if (minutes < 60) return `hace ${minutes} min`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `hace ${hours} h`;
-  const days = Math.round(hours / 24);
-  return `hace ${days} d`;
 }
 
 export function RecentActivityList({ items }: { items: RecentActivityItem[] }) {
@@ -63,10 +37,10 @@ export function RecentActivityList({ items }: { items: RecentActivityItem[] }) {
                 <span
                   className={cn(
                     "rounded-full px-2 py-0.5 text-[11px] font-medium",
-                    STATUS_BADGE[item.status]
+                    ORDER_STATUS_BADGE_CLASS[item.status]
                   )}
                 >
-                  {STATUS_LABELS[item.status]}
+                  {ORDER_STATUS_LABELS[item.status]}
                 </span>
               )}
             </div>

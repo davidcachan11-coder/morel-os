@@ -104,6 +104,12 @@ model User {
   accounts      Account[]
   sessions      Session[]
   recoveryCodes RecoveryCode[]
+  // Orders/Operations module — attributes a staff-made status change to
+  // the specific person who made it, per SECURITY_ARCHITECTURE.md §9's
+  // "attributable to a specific person, never just a role" principle.
+  // Nullable on OrderStatusEvent (not required here) because seeded rows
+  // predate this column and have no real actor.
+  orderStatusChanges OrderStatusEvent[]
 
   // Not unique — phone is deliberately never a merge/lookup key for
   // customer resolution (see docs/DECISIONS.md's saveOrder entry), only
@@ -364,8 +370,16 @@ model OrderStatusEvent {
   orderId   String
   status    OrderStatus
   createdAt DateTime    @default(now())
+  // Orders/Operations module (staff status-management mutations) — the
+  // staff member who made this transition. Null for the CONFIRMADO event
+  // saveOrder creates automatically (no human actor, checkout itself is
+  // the "actor") and for every pre-existing seeded row. Never set for
+  // customer-visible reads — this is an internal attribution field, not
+  // exposed by the public getOrder/getOrderStatus procedures.
+  changedByUserId String?
 
-  order Order @relation(fields: [orderId], references: [id])
+  order     Order @relation(fields: [orderId], references: [id])
+  changedBy User? @relation(fields: [changedByUserId], references: [id])
 
   @@index([orderId, createdAt])
 }

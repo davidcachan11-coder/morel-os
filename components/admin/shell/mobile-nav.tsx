@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Menu } from "lucide-react";
+import type { Role } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -13,7 +14,7 @@ import {
 } from "@/components/ui/sheet";
 import { AdminNavLinks } from "./nav-links";
 
-export function AdminMobileNav() {
+export function AdminMobileNav({ role }: { role: Role }) {
   const [open, setOpen] = useState(false);
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -36,7 +37,7 @@ export function AdminMobileNav() {
           </Link>
         </SheetHeader>
         <div className="flex-1 overflow-y-auto px-3 pb-4">
-          <AdminNavLinks onNavigate={() => setOpen(false)} />
+          <AdminNavLinks role={role} onNavigate={() => setOpen(false)} />
         </div>
       </SheetContent>
     </Sheet>

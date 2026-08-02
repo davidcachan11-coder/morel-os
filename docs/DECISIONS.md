@@ -2123,3 +2123,110 @@ built speculatively or worked around with an estimate:**
   browser verification pass (testing the "Hoy" period, which by real
   elapsed time now has zero current *and* zero previous orders) — not
   found by code review alone.
+
+---
+
+## 2026-08-02 — Orders / Operations module
+
+**Decision:** Build the first write-capable admin module — orders list
+(search, status/branch filters, pagination), a kanban-style board (the
+actual fulfillment workflow surface), order detail with a real status
+timeline, and status-management mutations. Everything else in `/admin`
+so far has been read-only reporting; this is the first module that
+changes live order state, which drove two decisions confirmed with the
+project owner before writing any code rather than assumed:
+
+**RBAC — restricted to `BRANCH_STAFF`/`BRANCH_MANAGER`/`OPS_MANAGER`/
+`ADMIN`,** per `BACKEND_ARCHITECTURE.md` §7's role table (Operations
+access is explicitly scoped there; finance/marketing/hr/executive are
+not listed). This is a stricter gate than Dashboard/Analytics' "any
+authenticated staff" pattern (`SECURITY_ARCHITECTURE.md` §5.1's
+"aggregate KPIs, staff-authenticated access only" classification), which
+stays correct for read-only reporting but doesn't extend to a module
+that mutates real orders. `lib/orders-rbac.ts` holds the one role list
+consumed by both the tRPC gate (`protectedProcedure(...ORDERS_STAFF_ROLES)`
+on every `orders.staff.*` procedure) and the page-level redirect
+(`app/admin/(app)/pedidos/page.tsx` — defense in depth on top of the
+procedure gate, since the shared `(app)` layout only checks "is staff,"
+not which module). Closed a gap this same change would have otherwise
+left open: `components/admin/shell/nav-config.ts`'s `roles` field had
+been reserved since the Phase 1 admin-shell work but never applied
+(every nav item was visible to every role) — now wired up for real via
+`nav-links.tsx` filtering, so "Pedidos" is hidden from roles that would
+just get redirected away from it, not left dangling as a visible-but-
+inaccessible link.
+
+**Status-change attribution — `OrderStatusEvent.changedByUserId`
+(nullable, new migration).** `SECURITY_ARCHITECTURE.md` §9's audit
+principle is "attributable to a specific person, never just a role,"
+and this is the first PR where staff can actually change something —
+a natural, minimal point to add it (one column, not the full `AuditLog`
+model, which this mutation doesn't rise to the level of — it isn't in
+§9's example list of privileged mutations like role changes or refunds).
+Null for the `CONFIRMADO` event `saveOrder` creates automatically (no
+human actor) and for every pre-existing seeded row.
+
+**Transition rules** (`server/orders/status.ts`'s `isValidStatusTransition`,
+reusing `ORDER_STATUS_SEQUENCE` from the now-shared
+`components/admin/order-status-ui.ts` rather than re-declaring it a
+third time): non-admin roles can move forward only, including skipping
+steps (some fulfillment paths genuinely skip one) but never backward or
+re-setting the same status. Admin gets a deliberate escape hatch — any
+different status, including backward — for correcting a mistaken update,
+surfaced as a separate, detail-page-only control
+(`AdminStatusSelect`) so it's never confused with the everyday
+`AdvanceStatusButton` action used on both the board and detail page.
+
+**Router shape:** `orders.staff.*`, nested under the existing `ordersRouter`
+rather than a new top-level router — this is squarely the Orders domain,
+just a different trust boundary (staff vs. the public customer procedures
+already in that file) within it, unlike `analyticsRouter`'s genuinely
+cross-domain reporting queries. `list`'s status filter is applied in
+memory after a bounded (500-row) candidate fetch, since current status is
+derived from the latest `OrderStatusEvent`, not a column — documented as
+a known scaling limit, not silently assumed to hold forever; a raw SQL
+`DISTINCT ON` query (or revisiting the schema's deliberate no-denormalized-
+status-field design, not done here) is the fix if it's ever actually hit.
+
+**Two real bugs caught during browser verification, fixed before
+finishing, not just noted:**
+1. The board view's unpaginated fetch size (200) exceeded `list`'s own
+   `pageSize` Zod validation (`max(100)`) — a live `TRPCError` surfaced
+   it immediately; fixed by capping the board fetch at 100 instead of
+   raising the schema's max.
+2. `Unknown argument changedByUserId` — the already-running dev server
+   process still had the pre-migration Prisma Client loaded in memory;
+   Turbopack's HMR reloads application code but not a regenerated
+   `node_modules/@prisma/client`. A schema migration requires an actual
+   process restart, not just a file-save — worth remembering the next
+   time a schema change lands mid-session against a long-running dev
+   server.
+
+**Verification performed:**
+- `tsc --noEmit`, `eslint`, `next build` clean throughout, including a
+  final full rebuild.
+- Full browser walkthrough with real logins (not curl/fetch) against the
+  live database, cross-checked against direct `psql` queries: search,
+  status filter, and the list/board view toggle all confirmed against
+  real data; a real status-advance mutation traced end-to-end — DB row
+  created with correct `status` and `changedByUserId` resolving to the
+  actual logged-in user, reflected correctly in the detail page's
+  timeline and in the next action button's label; the admin correction
+  control tested setting a status backward, correctly attributed.
+- Transition rules verified via a standalone script exercising all 8
+  cases (forward / skip / backward / same-status × staff / admin)
+  against logic identical to `isValidStatusTransition` — deleted after
+  running, matching this project's existing verification-script
+  discipline.
+- RBAC verified as defense in depth, not just one layer: a
+  `marketing-fresh` test account (role not in `ORDERS_STAFF_ROLES`) had
+  "Pedidos" hidden from its nav, was redirected on direct URL access,
+  *and* got a `FORBIDDEN` response calling the raw tRPC procedure
+  directly via `fetch` — all three checked independently, not inferred
+  from one passing.
+- Mobile (375px) list, board, and detail layouts confirmed. Dashboard
+  and Analytics re-tested afterward and confirmed unaffected by every
+  shared-file change (`order-status-breakdown.tsx`,
+  `recent-activity-list.tsx`, `lib/utils.ts`'s extracted
+  `formatRelativeTime`, the nav-shell prop threading) — no console
+  errors anywhere.

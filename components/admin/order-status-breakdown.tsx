@@ -1,22 +1,9 @@
 import type { OrderStatus } from "@prisma/client";
 import { ChevronRight, Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ORDER_STATUS_LABELS, ORDER_STATUS_SEQUENCE } from "@/components/admin/order-status-ui";
 
-const ORDERED_STATUSES: OrderStatus[] = [
-  "CONFIRMADO",
-  "PREPARANDO",
-  "CONTROL_CALIDAD",
-  "EN_CAMINO",
-  "ENTREGADO",
-];
-
-const STATUS_LABELS: Record<OrderStatus, string> = {
-  CONFIRMADO: "Confirmado",
-  PREPARANDO: "Preparando",
-  CONTROL_CALIDAD: "Control de calidad",
-  EN_CAMINO: "En camino",
-  ENTREGADO: "Entregado",
-};
+const ORDERED_STATUSES = ORDER_STATUS_SEQUENCE;
 
 const STATUS_ACCENT: Record<OrderStatus, string> = {
   CONFIRMADO: "border-t-brand-navy",
@@ -66,7 +53,7 @@ export function OrderStatusBreakdown({ data }: { data: OrderStatusBreakdownData 
                   >
                     <span className="text-xl font-semibold text-foreground">{count}</span>
                     <span className="mt-1 text-[11px] text-muted-foreground">
-                      {STATUS_LABELS[status]}
+                      {ORDER_STATUS_LABELS[status]}
                     </span>
                     <span className="mt-1 text-[10px] text-muted-foreground/70">{pct}%</span>
                   </div>

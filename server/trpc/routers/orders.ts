@@ -2,9 +2,10 @@ import "server-only";
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { Prisma } from "@prisma/client";
-import { publicProcedure, router } from "@/server/trpc/trpc";
+import { OrderStatus, Prisma } from "@prisma/client";
+import { protectedProcedure, publicProcedure, router } from "@/server/trpc/trpc";
 import { DELIVERY_FEE } from "@/constants/pricing";
+import { isValidStatusTransition, ORDERS_STAFF_ROLES } from "@/server/orders/status";
 
 // ---------------------------------------------------------------------------
 // saveOrder input
@@ -428,4 +429,199 @@ export const ordersRouter = router({
         });
       }
     }),
+
+  // ---------------------------------------------------------------------
+  // Orders/Operations module — staff-facing, role-gated (ORDERS_STAFF_ROLES:
+  // branch_staff/branch_manager/ops_manager/admin, per
+  // BACKEND_ARCHITECTURE.md §7 — confirmed as a deliberately stricter gate
+  // than Dashboard/Analytics' "any staff" pattern, since this is the first
+  // module that can mutate live order state). Nested under `orders`
+  // rather than a new top-level router — this is squarely the Orders
+  // domain, just a different trust boundary (staff vs. public) within it,
+  // unlike analyticsRouter's genuinely cross-domain reporting queries.
+  // ---------------------------------------------------------------------
+  staff: router({
+    list: protectedProcedure(...ORDERS_STAFF_ROLES)
+      .input(
+        z.object({
+          search: z.string().trim().min(1).optional(),
+          status: z.nativeEnum(OrderStatus).optional(),
+          branchId: z.string().min(1).optional(),
+          page: z.number().int().min(1).default(1),
+          pageSize: z.number().int().min(1).max(100).default(20),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const where: Prisma.OrderWhereInput = {
+          ...(input.branchId ? { branchId: input.branchId } : {}),
+          ...(input.search
+            ? {
+                OR: [
+                  { orderNumber: { contains: input.search, mode: "insensitive" } },
+                  {
+                    customer: {
+                      user: { name: { contains: input.search, mode: "insensitive" } },
+                    },
+                  },
+                  {
+                    customer: {
+                      user: { email: { contains: input.search, mode: "insensitive" } },
+                    },
+                  },
+                ],
+              }
+            : {}),
+        };
+
+        // Current status is derived (latest OrderStatusEvent), not a
+        // column — it can't be pushed into `where` at the database level
+        // (see prisma/schema.prisma's OrderStatusEvent comment on why
+        // there's deliberately no denormalized status field on Order).
+        // Bounded candidate fetch, then in-memory status filter +
+        // pagination. Fine at today's order volume; would need a raw SQL
+        // DISTINCT ON query — or revisiting that schema decision, not
+        // done here — if volume ever grows large enough for this
+        // candidate fetch itself to become expensive.
+        const CANDIDATE_CAP = 500;
+        const candidates = await ctx.prisma.order.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          take: CANDIDATE_CAP,
+          select: {
+            id: true,
+            orderNumber: true,
+            createdAt: true,
+            total: true,
+            customer: { select: { user: { select: { name: true, email: true } } } },
+            branch: { select: { name: true } },
+            statusEvents: { orderBy: { createdAt: "desc" }, take: 1, select: { status: true } },
+          },
+        });
+
+        const withStatus = candidates.map((order) => ({
+          id: order.id,
+          orderNumber: order.orderNumber,
+          createdAt: order.createdAt,
+          total: Number(order.total),
+          customerName: order.customer.user.name ?? order.customer.user.email,
+          branchName: order.branch.name,
+          status: order.statusEvents[0]?.status ?? null,
+        }));
+
+        const filtered = input.status
+          ? withStatus.filter((o) => o.status === input.status)
+          : withStatus;
+
+        const total = filtered.length;
+        const start = (input.page - 1) * input.pageSize;
+        const page = filtered.slice(start, start + input.pageSize);
+
+        return { orders: page, total, page: input.page, pageSize: input.pageSize };
+      }),
+
+    getDetail: protectedProcedure(...ORDERS_STAFF_ROLES)
+      .input(z.object({ id: z.string().min(1) }))
+      .query(async ({ ctx, input }) => {
+        const order = await ctx.prisma.order.findUnique({
+          where: { id: input.id },
+          select: {
+            id: true,
+            orderNumber: true,
+            createdAt: true,
+            address: true,
+            subtotal: true,
+            deliveryFee: true,
+            total: true,
+            customer: {
+              select: {
+                id: true,
+                user: { select: { name: true, email: true, phone: true } },
+              },
+            },
+            branch: { select: { id: true, name: true } },
+            deliverySlot: {
+              select: { dayLabel: true, dateLabel: true, timeRange: true, express: true },
+            },
+            items: {
+              select: {
+                id: true,
+                quantity: true,
+                neverSubstitute: true,
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    unit: true,
+                    price: true,
+                    emoji: true,
+                    gradient: true,
+                  },
+                },
+              },
+            },
+            // changedBy is internal attribution (see prisma/schema.prisma's
+            // OrderStatusEvent comment) — safe here since this whole
+            // procedure is already staff-gated; never exposed by the
+            // public getOrder/getOrderStatus above.
+            statusEvents: {
+              orderBy: { createdAt: "asc" },
+              select: {
+                status: true,
+                createdAt: true,
+                changedBy: { select: { name: true, email: true } },
+              },
+            },
+          },
+        });
+        if (!order) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Pedido no encontrado." });
+        }
+        return order;
+      }),
+
+    updateStatus: protectedProcedure(...ORDERS_STAFF_ROLES)
+      .input(z.object({ id: z.string().min(1), status: z.nativeEnum(OrderStatus) }))
+      .mutation(async ({ ctx, input }) => {
+        const order = await ctx.prisma.order.findUnique({
+          where: { id: input.id },
+          select: {
+            statusEvents: { orderBy: { createdAt: "desc" }, take: 1, select: { status: true } },
+          },
+        });
+        if (!order) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Pedido no encontrado." });
+        }
+
+        const currentStatus = order.statusEvents[0]?.status;
+        if (!currentStatus) {
+          // Fail closed — every real order gets a CONFIRMADO event from
+          // saveOrder; a row with none is an inconsistent state, never
+          // trusted enough to guess a transition from.
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "El pedido no tiene historial de estado.",
+          });
+        }
+
+        if (!isValidStatusTransition(currentStatus, input.status, ctx.session.role)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              ctx.session.role === "ADMIN"
+                ? "El nuevo estado debe ser diferente al actual."
+                : "Solo se puede avanzar a un estado posterior en la secuencia.",
+          });
+        }
+
+        await ctx.prisma.orderStatusEvent.create({
+          data: {
+            orderId: input.id,
+            status: input.status,
+            changedByUserId: ctx.session.userId,
+          },
+        });
+
+        return { ok: true as const };
+      }),
+  }),
 });

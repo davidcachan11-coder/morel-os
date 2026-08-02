@@ -2,14 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import type { Role } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { ADMIN_NAV_ITEMS } from "./nav-config";
 
-export function AdminNavLinks({ onNavigate }: { onNavigate?: () => void }) {
+export function AdminNavLinks({
+  role,
+  onNavigate,
+}: {
+  role: Role;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
+  const items = ADMIN_NAV_ITEMS.filter((item) => !item.roles || item.roles.includes(role));
   return (
     <nav className="flex flex-col gap-1">
-      {ADMIN_NAV_ITEMS.map((item) => {
+      {items.map((item) => {
         const active =
           item.href === "/admin" ? pathname === "/admin" : pathname.startsWith(item.href);
         const Icon = item.icon;
