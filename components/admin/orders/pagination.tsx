@@ -6,11 +6,14 @@ export function Pagination({
   pageSize,
   total,
   buildHref,
+  itemLabel = "pedidos",
 }: {
   page: number;
   pageSize: number;
   total: number;
   buildHref: (page: number) => string;
+  /** Plural noun for the count line, e.g. "pedidos", "clientes". */
+  itemLabel?: string;
 }) {
   const totalPages = Math.max(Math.ceil(total / pageSize), 1);
   if (totalPages <= 1) return null;
@@ -21,7 +24,7 @@ export function Pagination({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
       <span>
-        {start}–{end} de {total} pedidos
+        {start}–{end} de {total} {itemLabel}
       </span>
       <div className="flex items-center gap-1">
         <Link

@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { SiteHeader } from "@/components/site-header";
 import { CartDrawer } from "@/components/cart-drawer";
+import { PageViewTracker } from "@/components/analytics/page-view-tracker";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,6 +35,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-background">
         <TooltipProvider delayDuration={150}>
+          <PageViewTracker />
           <SiteHeader />
           {children}
           <CartDrawer />

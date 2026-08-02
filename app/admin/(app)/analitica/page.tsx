@@ -3,6 +3,9 @@ import { RevenueTrendChart } from "@/components/admin/revenue-trend-chart";
 import { TopProductsList } from "@/components/admin/top-products-list";
 import { CategoryPerformanceList } from "@/components/admin/category-performance-list";
 import { CustomerStatsPanel } from "@/components/admin/customer-stats-panel";
+import { FunnelStages } from "@/components/admin/funnel-stages";
+import { AbandonmentSummary } from "@/components/admin/abandonment-summary";
+import { AbandonedCartsList } from "@/components/admin/abandoned-carts-list";
 import { BranchComparisonTable } from "@/components/admin/branch-comparison-table";
 import { SalesSummaryStrip, type SalesSummaryStat } from "@/components/admin/sales-summary-strip";
 import { SortToggle } from "@/components/admin/sort-toggle";
@@ -49,6 +52,8 @@ export default async function AnaliticaPage({
     customerStats,
     branchComparison,
     branches,
+    funnel,
+    abandonedCarts,
   ] = await Promise.all([
     trpc.analytics.getSummary({ period, branchId }),
     trpc.analytics.getRevenueTrend({ period, branchId }),
@@ -57,6 +62,11 @@ export default async function AnaliticaPage({
     trpc.analytics.getCustomerStats({ period, branchId }),
     trpc.analytics.getBranchPerformance({ period }),
     trpc.analytics.listBranches(),
+    // Ecommerce Funnel Analytics / Cart Abandonment foundation —
+    // deliberately not branch-scoped: visitor-level browsing events aren't
+    // attributed to a branch anywhere in the schema (only Order is).
+    trpc.events.getFunnel({ period }),
+    trpc.events.getAbandonedCarts({ limit: 10 }),
   ]);
 
   const hasItemizedSales = topProducts.length > 0 || categoryPerformance.length > 0;
@@ -192,6 +202,42 @@ export default async function AnaliticaPage({
             de carrito.
           </p>
         )}
+
+        <section className="flex flex-col gap-6 rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
+          <div>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">
+              Embudo de conversión y abandono
+            </h2>
+            <p className="mb-4 text-xs text-muted-foreground">
+              Visitante → vio un producto → agregó al carrito → inició el pago → compró. Conteos
+              de visitantes distintos, no un embudo estrictamente secuencial — ver nota en
+              eventsRouter.getFunnel.
+            </p>
+            <FunnelStages stages={funnel.stages} />
+          </div>
+
+          <AbandonmentSummary
+            stats={[
+              {
+                label: "Abandono de carrito",
+                abandonedCount: funnel.cartAbandonment.abandonedCount,
+                ratePct: funnel.cartAbandonment.ratePct,
+              },
+              {
+                label: "Abandono de checkout",
+                abandonedCount: funnel.checkoutAbandonment.abandonedCount,
+                ratePct: funnel.checkoutAbandonment.ratePct,
+              },
+            ]}
+          />
+
+          <div>
+            <h3 className="mb-3 text-xs font-semibold text-muted-foreground">
+              Carritos abandonados ahora mismo
+            </h3>
+            <AbandonedCartsList carts={abandonedCarts} />
+          </div>
+        </section>
 
         <section className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
           <h2 className="mb-1 text-sm font-semibold text-foreground">Comparación por sucursal</h2>

@@ -1,11 +1,13 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { Minus, Plus, ShoppingCart, Star } from "lucide-react";
 import { motion } from "framer-motion";
 import { type Product } from "@/data/catalog";
 import { useCartStore } from "@/lib/cart-store";
 import { Button } from "@/components/ui/button";
 import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
+import { trackEvent } from "@/lib/analytics-client";
 
 export function ProductCard({ product }: { product: Product }) {
   const line = useCartStore((s) => s.lines[product.id]);
@@ -14,8 +16,33 @@ export function ProductCard({ product }: { product: Product }) {
 
   const step = product.unit === "kg" ? 0.5 : 1;
 
+  // Customer Intelligence & Growth Analytics — PRODUCT_VIEW as a viewport
+  // impression, not a click. There's no product detail page/route today
+  // (products only ever render inline as grid cards), so "the card
+  // actually scrolled into view" is the honest, real signal available —
+  // fired once per mount, not on every scroll back into view.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const hasTrackedView = useRef(false);
+  useEffect(() => {
+    const node = cardRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !hasTrackedView.current) {
+          hasTrackedView.current = true;
+          trackEvent("PRODUCT_VIEW", { productId: product.id, categoryId: product.category });
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.5 }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [product.id, product.category]);
+
   return (
     <motion.div
+      ref={cardRef}
       whileHover={{ y: -4 }}
       transition={{ type: "spring", stiffness: 300, damping: 22 }}
       className="group relative flex flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-soft transition-shadow hover:shadow-soft-lg"

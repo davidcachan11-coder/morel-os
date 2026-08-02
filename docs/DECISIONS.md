@@ -2230,3 +2230,210 @@ finishing, not just noted:**
   `recent-activity-list.tsx`, `lib/utils.ts`'s extracted
   `formatRelativeTime`, the nav-shell prop threading) — no console
   errors anywhere.
+
+---
+
+## 2026-08-02 — Customer Intelligence & Growth Analytics foundation
+
+**Naming note, confirmed with the project owner before writing any code:**
+this work is referred to as "Customer Intelligence & Growth Analytics"
+in conversation and in this entry, but `docs/ROADMAP.md`'s own numbered
+Sprint 6 remains "Payments & Fiscal Compliance," unchanged — this is an
+informal label for a reprioritized piece of work, not a renumbering of
+the roadmap. Testing/Hardening/Dashboard-Suite sprint numbers in
+`docs/ROADMAP.md` are likewise untouched.
+
+**Decision:** Build the event-tracking model this app has never had —
+`docs/DECISIONS.md`'s own Analytics-depth entry above already named
+"behavioral tracking / customer intelligence" as needing a dedicated
+event-tracking model before anything could be built, explicitly flagging
+"nothing here should be built against synthetic events." This entry is
+that model, plus the funnel/abandonment/segmentation reporting and admin
+UI built on top of it — all against real, tracked events from day one.
+
+**New domain, new router — `server/trpc/routers/events.ts`
+(`eventsRouter`), not folded into `analyticsRouter`.** `analyticsRouter`
+is cross-domain reporting over existing tables (Order/OrderItem/Product/
+Customer); this is a new domain — an event log with its own public
+ingestion surface (the overwhelming majority of storefront traffic is
+unauthenticated) alongside staff-gated reads, matching how `orders.staff`
+is nested for a different trust boundary within `ordersRouter` rather
+than analyticsRouter's genuinely cross-domain queries.
+
+**Schema — two new models, `AnalyticsEvent` and `CartSnapshot`
+(`prisma/schema.prisma`):**
+- `AnalyticsEvent`: one generic table (`AnalyticsEventType` enum +
+  `metadata` Json) rather than one table per event type — far fewer
+  migrations as the taxonomy grows, at the cost of `metadata` not being
+  indexable/type-safe the way dedicated columns would be. Acceptable at
+  today's single-market DR storefront traffic scale.
+- Deliberately stateless on the write path — no server-side `Session`
+  row. `visitorId`/`sessionId` are client-generated
+  (`lib/analytics-client.ts`), persisted client-side; session boundaries
+  are inferred (a 30-minute idle-time rotation), not authoritative, but
+  ingestion stays pure inserts with no read-modify-write.
+- `customerId` is set only when the request carries a real, logged-in
+  Auth.js customer session (`eventsRouter`'s `resolveCustomerId`) —
+  **deliberately NOT backfilled by a guest checkout.** `saveOrder`
+  resolves/creates a real `Customer` row with no session cookie, so a
+  guest purchase's `PURCHASE_COMPLETED` (and every event before it) stays
+  `customerId: null` even though a `Customer` now exists for that email.
+  `Order.customerId` is the authoritative purchase→customer link for
+  segmentation/CLV (the customer-list/detail queries below query `Order`
+  directly, never this column) — linking a guest visitor's pre-purchase
+  browsing history back to the `Customer` their checkout creates would
+  need retroactively updating this table, which the append-only design
+  deliberately avoids. A future extension, not built here; caught and
+  fixed in the schema's own comment after a live browser test proved an
+  earlier draft of that comment overclaimed "checkout" as a backfill
+  trigger.
+- `SECTION_DWELL` (time spent in a section) is its own event type, added
+  before any UI consumed the enum — folding dwell time into `PAGE_VIEW`'s
+  metadata after the fact would require patching an already-inserted row,
+  breaking the pure-insert design; a section's dwell time is only known
+  once the visitor leaves it, so it's a separate, later event instead.
+- `CartSnapshot`: a denormalized "current cart state" cache, separate
+  from `AnalyticsEvent`'s append-only log. `ADD_TO_CART`/`REMOVE_FROM_CART`
+  events remain the source of truth for funnel analytics; reconstructing
+  "what's in this visitor's cart right now" by replaying an arbitrary
+  event chain is the wrong tool for "list abandoned carts with their
+  exact contents," which a future recovery campaign needs cheaply
+  queryable. One open snapshot per visitor (`visitorId` unique), upserted
+  (debounced) from the exact mutation points `lib/cart-store.ts` already
+  has — no rewrite of the cart store itself. An empty cart never destroys
+  an already-recovered row (`recoveredAt`/`recoveredOrderId`) — that row
+  is a short-lived historical record of the abandonment→recovery moment,
+  not "current cart" cache anymore, and the checkout flow's own
+  `clearCart()` (which fires the same empty-cart sync moments after a
+  purchase) must not erase it. A fresh, non-empty cart from the same
+  long-lived `visitorId` always clears any prior recovery marking — this
+  table tracks one "current cycle" per visitor, not a full historical
+  audit log across every cart cycle a visitor ever builds; a deliberate,
+  documented trade-off, not an oversight.
+
+**Ingestion — `lib/analytics-client.ts` + `app/api/track/route.ts`.**
+`trackEvent()` batches most event types (flushed every 10s or on
+`visibilitychange`/`pagehide`) but sends `ADD_TO_CART`/`REMOVE_FROM_CART`/
+`CHECKOUT_STARTED`/`PURCHASE_COMPLETED` immediately via the customer-aware
+tRPC mutation — funnel-critical, individually rare, must never be lost to
+a tab closing before the batch timer fires. `navigator.sendBeacon()` is
+the only reliable flush at tab-hide (`SECTION_DWELL` in particular), but
+`sendBeacon` can't go through tRPC's `httpLink`; `app/api/track/route.ts`
+is a plain POST endpoint sharing `server/analytics/track.ts`'s exact
+validation/insert logic with `eventsRouter.track` so the two entry points
+can't drift. The beacon route always resolves `customerId: null` — paying
+for two Auth.js instance lookups on every tab-hide beacon isn't worth it
+for what's specifically anonymous dwell-time telemetry. Every tracking
+call is fire-and-forget and exception-safe by construction — a tracking
+failure must never surface to the visitor or interrupt the flow it's
+observing.
+
+**Wired into:** `lib/cart-store.ts` (the single centralized mutation
+point — `addItem`→`ADD_TO_CART`, `removeItem`/zero-quantity→
+`REMOVE_FROM_CART`, an existing line's quantity nudge→`PRODUCT_INTERACTION`,
+never re-firing `ADD_TO_CART` on every nudge, which would inflate the
+funnel's add-to-cart count); a new `components/analytics/page-view-tracker.tsx`
+mounted once in the root layout (excludes `/admin` — this tracks
+visitor/customer behavior, not staff dashboard usage); `app/tienda/page.tsx`
+(category clicks, debounced search with real result counts); `components/tienda/product-card.tsx`
+(`PRODUCT_VIEW` as a viewport impression via `IntersectionObserver`, not a
+click — there's no product detail page/route today, so "the card actually
+scrolled into view" is the honest signal available, not a fabricated one);
+`app/tienda/checkout/page.tsx` (`CHECKOUT_STARTED` once per mount with a
+non-empty cart, `PURCHASE_COMPLETED` + `recoverCartSnapshot()` on
+`saveOrder` success — the recovery call must fire before `clearCart()`,
+so it lands before the empty-cart sync `clearCart()` triggers moments
+later).
+
+**Reporting — `eventsRouter.getFunnel`/`getAbandonedCarts`, new
+`server/analytics/segments.ts`, new `customersRouter`:**
+- `getFunnel`'s per-stage counts are "distinct visitors who reached at
+  least this stage in the period" — a stage-reach count, not a strict
+  ordered funnel (doesn't verify a purchaser was also counted at every
+  earlier stage via one joined path). Honest at today's traffic volume,
+  same "real query, clearly labeled where it's an approximation"
+  precedent as `getTopProducts`/`getCategoryPerformance`. Cart/checkout
+  abandonment rates ARE exact set differences (visitor-id set operations
+  in memory), not a count subtraction — the two counts alone can't safely
+  be subtracted without risking a negative or cross-period-contaminated
+  result.
+- Customer segmentation (VIP/Frequent/Returning/New/Inactive) uses fixed,
+  labeled, configurable thresholds (`server/analytics/segments.ts`) —
+  same reasoning and pattern as `server/analytics/alerts.ts`'s existing
+  thresholds: nothing in docs/ specifies a real VIP spend cutoff or
+  inactivity window, and this codebase's own prior Analytics-depth entry
+  already ruled out real RFM/cohort scoring as needing more temporally
+  spread-out order history than exists today. A labeled default,
+  explicitly flagged as configurable-later, not a discovered fact.
+- `customersRouter` (`list`/`getDetail`) is its own new top-level router —
+  fulfills `/admin/clientes`'s placeholder, whose own `dataNote` already
+  pointed here ("aggregate metrics... are in Analítica; this section is
+  the individual customer view, not yet built"). This is the Customer
+  domain's own read model, not a cross-domain reporting query — the
+  first real procedure for that domain, landing exactly at the point
+  `server/trpc/root.ts`'s own comment says a domain earns a router file.
+
+**Admin UI:** a new "Embudo de conversión y abandono" section on
+`/admin/analitica` (funnel stage bars, cart/checkout abandonment rate
+tiles, the current abandoned-carts backlog — no recovery action wired,
+deliberately: email/WhatsApp/push notifications are explicit future-phase
+automation, not this foundation); `/admin/clientes`'s placeholder replaced
+with a real searchable, paginated list plus a per-customer detail page
+(segment badge, order history, lifetime spend, average order value, and
+a real substitution-preference percentage derived from that customer's
+own `OrderItem.neverSubstitute` history).
+
+**Explicitly not built — confirmed before commit:**
+- **No notifications implemented.** No email/WhatsApp/SMS/push send path
+  anywhere in this change. Verified by grep across every new/modified
+  file for Twilio/WhatsApp/Resend/SendGrid/nodemailer/SMS/push — the only
+  matches are code comments stating this is deliberately *not* wired.
+- **No automated campaigns implemented.** `getAbandonedCarts` is a
+  read-only listing query; nothing schedules, triggers, or sends a
+  recovery action.
+- **No external messaging integrations.** Zero `fetch()`/external HTTP
+  calls in any new/modified file; no new dependency added to
+  `package.json` (no Twilio/Resend/Inngest/Upstash).
+- **No advanced RFM/cohort analytics.** `server/analytics/segments.ts` is
+  a fixed-threshold classifier only (VIP spend / order-count / recency
+  cutoffs) — no scoring, weighting, or clustering — per this same entry's
+  own segmentation section above and the prior Analytics-depth entry's
+  reasoning for why that's the right amount of segmentation for today's
+  data volume.
+
+Also not built: a recommendation engine, storefront/landing/category
+redesign, or an inventory/product-management module — out of scope from
+the start, not trimmed down from something larger. The schema is shaped
+so a future Inngest job (already the chosen stack for background jobs,
+not installed) can read `CartSnapshot`/`AnalyticsEvent` later — nothing
+here installs that dependency speculatively.
+
+This phase establishes the Customer Intelligence foundation only: real
+event tracking, cart-abandonment detection, and fixed-threshold customer
+segmentation, all against real data. Notifications, automated recovery
+campaigns, and advanced segmentation are future phases building on top of
+this foundation, not part of it.
+
+**Verification performed:**
+- `tsc --noEmit`, `eslint`, `next build` clean after every phase,
+  including a final full rebuild.
+- Full browser walkthrough with real logins (not curl/fetch) against the
+  live database, cross-checked against direct Prisma queries at every
+  step: `PAGE_VIEW`/`PRODUCT_VIEW`(viewport)/`CATEGORY_VIEW`/`SEARCH`/
+  `ADD_TO_CART`/`CHECKOUT_STARTED`/`PURCHASE_COMPLETED`/`SECTION_DWELL`
+  all confirmed landing with correct, real metadata; the full cart
+  abandonment→recovery cycle confirmed end-to-end, including that the
+  post-purchase empty-cart sync does NOT delete the just-recovered
+  snapshot row; the Analítica funnel/abandonment section and the real
+  Clientes list (search, segmentation) and detail page (order history,
+  substitution %) all verified against real seed + test-generated data;
+  no console errors anywhere.
+- One real bug caught by this same browser verification, fixed before
+  finishing: the `customerId`/"checkout" backfill claim in
+  `AnalyticsEvent`'s own schema comment was proven wrong by a live guest
+  checkout (the row stayed `customerId: null`) — corrected to describe
+  actual behavior rather than intent.
+- A shared `components/admin/orders/pagination.tsx` component gained an
+  `itemLabel` prop (default `"pedidos"`, unchanged for existing callers)
+  rather than a duplicate component, since reusing it for the new
+  Clientes list would otherwise have hardcoded the wrong noun.

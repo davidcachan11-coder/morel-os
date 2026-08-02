@@ -87,7 +87,7 @@ model User {
 
   // Staff credentials login only (SECURITY_ARCHITECTURE.md §4.1) — argon2
   // hash. Customers authenticate via OAuth/magic link and never set this.
-  passwordHash String?
+  passwordHash       String?
   // True when an admin creates a staff account with a temporary password
   // (approved Sprint 5 staff-provisioning decision); cleared once the
   // staff member sets their own. Meaningless/unused for customers.
@@ -95,15 +95,15 @@ model User {
   // Encrypted TOTP secret (SECURITY_ARCHITECTURE.md §4.2) — enrollment and
   // verification logic land in a later Sprint 5 PR; this column is reserved
   // now so that PR doesn't need its own migration.
-  totpSecret String?
+  totpSecret         String?
 
   customer Customer?
   driver   Driver?
   // employee relation added once Employee lands (Sprint 9+)
 
-  accounts      Account[]
-  sessions      Session[]
-  recoveryCodes RecoveryCode[]
+  accounts           Account[]
+  sessions           Session[]
+  recoveryCodes      RecoveryCode[]
   // Orders/Operations module — attributes a staff-made status change to
   // the specific person who made it, per SECURITY_ARCHITECTURE.md §9's
   // "attributable to a specific person, never just a role" principle.
@@ -208,10 +208,11 @@ model Category {
   // Natural key preserved from data/catalog.ts's CategoryId slugs (e.g.
   // "frutas-verduras") for byte-identical seeding, matching the sketch's
   // own choice of a manual (non-cuid) id for this model.
-  id       String    @id
-  name     String
-  gradient String
-  products Product[]
+  id              String           @id
+  name            String
+  gradient        String
+  products        Product[]
+  analyticsEvents AnalyticsEvent[]
 }
 
 model Brand {
@@ -234,11 +235,12 @@ model Product {
   gradient      String
   popular       Boolean  @default(false)
 
-  brand      Brand?      @relation(fields: [brandId], references: [id])
-  category   Category    @relation(fields: [categoryId], references: [id])
-  orderItems OrderItem[]
+  brand           Brand?           @relation(fields: [brandId], references: [id])
+  category        Category         @relation(fields: [categoryId], references: [id])
+  orderItems      OrderItem[]
   // taxCategory relation added once TaxCategory lands (Sprint 6)
   // inventoryItems relation added once InventoryItem lands
+  analyticsEvents AnalyticsEvent[]
 
   @@index([categoryId])
 }
@@ -255,6 +257,13 @@ model Customer {
   addresses Address[]
   orders    Order[]
   // preference relation added once CustomerPreference lands (out of Sprint 3 scope)
+
+  // Customer Intelligence & Growth Analytics (docs/DECISIONS.md's
+  // "Customer Intelligence & Growth Analytics" entry) — set once a
+  // visitor is resolved to a real Customer (checkout or login), never
+  // required.
+  analyticsEvents AnalyticsEvent[]
+  cartSnapshots   CartSnapshot[]
 }
 
 model Address {
@@ -366,10 +375,10 @@ model OrderStatusEvent {
   // Order (matches the sketch's explicit design intent). Sprint 4 replaces
   // hooks/use-order-progress.ts's wall-clock simulation with real polling
   // against this history table.
-  id        String      @id @default(cuid())
-  orderId   String
-  status    OrderStatus
-  createdAt DateTime    @default(now())
+  id              String      @id @default(cuid())
+  orderId         String
+  status          OrderStatus
+  createdAt       DateTime    @default(now())
   // Orders/Operations module (staff status-management mutations) — the
   // staff member who made this transition. Null for the CONFIRMADO event
   // saveOrder creates automatically (no human actor, checkout itself is
@@ -406,4 +415,125 @@ model Delivery {
 
   order  Order  @relation(fields: [orderId], references: [id])
   driver Driver @relation(fields: [driverId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// Customer Intelligence & Growth Analytics (docs/DECISIONS.md's dated entry
+// under that name — an informal label, not a renumbered sprint; see
+// docs/ROADMAP.md, whose own Sprint 6 remains "Payments & Fiscal
+// Compliance," unchanged)
+//
+// Fulfills the event-tracking model docs/DECISIONS.md's Analytics-depth
+// entry named as a prerequisite for any behavioral-tracking / customer-
+// intelligence work ("has no event-tracking model at all yet ... Nothing
+// here should be built against synthetic events").
+// ---------------------------------------------------------------------------
+
+enum AnalyticsEventType {
+  PAGE_VIEW
+  CATEGORY_VIEW
+  PRODUCT_VIEW
+  // "Time spent in sections" — its own type rather than folded into
+  // PAGE_VIEW's metadata after the fact, since AnalyticsEvent rows are
+  // pure inserts (see the model comment below): a section's dwell time
+  // is only known once the visitor leaves it, so it's fired as a
+  // separate, later event, not a patch to the original PAGE_VIEW/
+  // CATEGORY_VIEW/PRODUCT_VIEW row.
+  SECTION_DWELL
+  PRODUCT_INTERACTION
+  SEARCH
+  ADD_TO_CART
+  REMOVE_FROM_CART
+  CHECKOUT_STARTED
+  PURCHASE_COMPLETED
+}
+
+// One generic event table (type + JSON metadata) rather than one table per
+// event type — far fewer migrations as the taxonomy grows, at the cost of
+// metadata not being indexable/type-safe the way dedicated columns would
+// be. Acceptable at today's traffic scale (single-market DR storefront);
+// revisit if a specific query pattern needs an indexed metadata field.
+//
+// Deliberately stateless on the write path — no server-side Session row.
+// visitorId/sessionId are client-generated (lib/analytics-client.ts) and
+// persisted client-side; "session" boundaries are inferred (an idle-time
+// rotation), not authoritative, but this keeps ingestion to pure inserts
+// with no read-modify-write.
+model AnalyticsEvent {
+  id          String             @id @default(cuid())
+  type        AnalyticsEventType
+  // Opaque, client-generated identity for pre-auth visitors — never PII by
+  // itself. Long-lived (persists across sessions) so a visitor's funnel
+  // can be tracked before any account exists.
+  visitorId   String
+  // Rotates after a period of client-side inactivity — approximates a
+  // browsing session without a server-side Session row.
+  sessionId   String
+  // Set only when the request carries a real, logged-in Auth.js customer
+  // session (server/trpc/routers/events.ts's resolveCustomerId) — null
+  // for the common case of an anonymous visitor. Deliberately NOT
+  // backfilled by a guest checkout: saveOrder resolves/creates a real
+  // Customer row without any session cookie, so a guest purchase's
+  // PURCHASE_COMPLETED (and every event before it) stays customerId:null
+  // even though a Customer now exists for that email. Order.customerId is
+  // the authoritative purchase→customer link for segmentation/CLV
+  // (Phase 5 queries Order directly, not this column); linking a guest
+  // visitor's pre-purchase browsing history back to the Customer record
+  // their checkout creates would need retroactively updating this table,
+  // which the append-only write design above deliberately avoids — a
+  // future extension, not built here.
+  customerId  String?
+  path        String?
+  categoryId  String?
+  productId   String?
+  searchQuery String?
+  // Event-specific extras not worth a dedicated column (e.g. dwell-time
+  // ms captured via sendBeacon on unload, referrer).
+  metadata    Json?
+  createdAt   DateTime           @default(now())
+
+  customer Customer? @relation(fields: [customerId], references: [id])
+  product  Product?  @relation(fields: [productId], references: [id])
+  category Category? @relation(fields: [categoryId], references: [id])
+
+  @@index([visitorId, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([type, createdAt])
+  @@index([customerId])
+}
+
+// Cart Abandonment foundation. A denormalized "current cart state" cache,
+// separate from AnalyticsEvent's append-only log: ADD_TO_CART/
+// REMOVE_FROM_CART events remain the source of truth for funnel analytics,
+// but reconstructing "what's in this visitor's cart right now" by
+// replaying an arbitrary-length event chain is the wrong tool for "list
+// abandoned carts with their exact contents," which a future recovery
+// campaign needs cheaply queryable. Upserted (debounced) from the same
+// mutation points lib/cart-store.ts already has (addItem/removeItem/
+// setQuantity) — no rewrite of the cart store itself.
+//
+// No notification-sending logic accompanies this table — per the
+// approved scope, this is the data foundation only.
+model CartSnapshot {
+  id               String    @id @default(cuid())
+  // One open snapshot per visitor — the upsert key.
+  visitorId        String    @unique
+  customerId       String?
+  // Denormalized, client-shape cart contents:
+  // [{ productId, quantity, neverSubstitute }]. Not modeled as relational
+  // rows — this is a point-in-time cache, not a durable record intended
+  // for referential integrity the way OrderItem is.
+  items            Json
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  // Set (never deleted) once this visitor completes a purchase — keeps a
+  // real, queryable abandonment -> recovery rate rather than losing the
+  // row the moment it's no longer "abandoned."
+  recoveredAt      DateTime?
+  recoveredOrderId String?
+
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@index([updatedAt])
 }

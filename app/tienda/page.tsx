@@ -1,11 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
 import { categories, products, type CategoryId } from "@/data/catalog";
 import { ProductCard } from "@/components/tienda/product-card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { trackEvent } from "@/lib/analytics-client";
+
+// How long to wait after the visitor stops typing before a SEARCH event
+// fires — avoids logging one event per keystroke while still capturing
+// real search intent, not every intermediate substring.
+const SEARCH_DEBOUNCE_MS = 600;
 
 export default function TiendaPage() {
   const [query, setQuery] = useState("");
@@ -21,6 +27,30 @@ export default function TiendaPage() {
       return matchesCategory && matchesQuery;
     });
   }, [query, activeCategory]);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) return;
+    const timer = setTimeout(() => {
+      trackEvent("SEARCH", {
+        searchQuery: trimmed,
+        metadata: { resultCount: filtered.length },
+      });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // filtered is derived from query/activeCategory — depending on the
+    // primitives it's computed from (already in this array) is enough;
+    // adding the array itself would re-arm the debounce timer whenever
+    // the *category* changes mid-search too, which is the desired coupling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, activeCategory]);
+
+  function handleCategorySelect(category: CategoryId | "todas") {
+    setActiveCategory(category);
+    if (category !== "todas") {
+      trackEvent("CATEGORY_VIEW", { categoryId: category });
+    }
+  }
 
   return (
     <div className="flex flex-1 flex-col bg-background">
@@ -54,7 +84,7 @@ export default function TiendaPage() {
 
           <div className="mt-5 flex flex-wrap gap-2">
             <button
-              onClick={() => setActiveCategory("todas")}
+              onClick={() => handleCategorySelect("todas")}
               className={cn(
                 "rounded-full border px-4 py-1.5 text-sm font-medium transition-colors",
                 activeCategory === "todas"
@@ -67,7 +97,7 @@ export default function TiendaPage() {
             {categories.map((cat) => (
               <button
                 key={cat.id}
-                onClick={() => setActiveCategory(cat.id)}
+                onClick={() => handleCategorySelect(cat.id)}
                 className={cn(
                   "flex items-center gap-1.5 rounded-full border px-4 py-1.5 text-sm font-medium transition-colors",
                   activeCategory === cat.id

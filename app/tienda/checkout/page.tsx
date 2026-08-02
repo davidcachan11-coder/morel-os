@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
@@ -37,6 +37,7 @@ import { CheckoutSummary } from "@/components/tienda/checkout-summary";
 import { DELIVERY_FEE } from "@/constants/pricing";
 import { saveOrder, type StoredOrder } from "@/services/orders";
 import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
+import { trackEvent, recoverCartSnapshot } from "@/lib/analytics-client";
 
 const steps = ["Sustituciones", "Entrega", "Pago", "Confirmación"];
 
@@ -70,6 +71,20 @@ export default function CheckoutPage() {
   useEffect(() => {
     ensureIdempotencyKey();
   }, [ensureIdempotencyKey]);
+
+  // Customer Intelligence & Growth Analytics — fired once per mount, the
+  // moment a visitor enters the checkout flow with a real cart. Not
+  // re-fired on every subsequent cart edit (substitution toggles, slot
+  // selection) — "checkout started" is a funnel stage entered once, not a
+  // per-interaction event.
+  const hasTrackedCheckoutStart = useRef(false);
+  useEffect(() => {
+    if (hasTrackedCheckoutStart.current || linesArray.length === 0) return;
+    hasTrackedCheckoutStart.current = true;
+    trackEvent("CHECKOUT_STARTED", {
+      metadata: { itemCount: linesArray.length, subtotal },
+    });
+  }, [linesArray, subtotal]);
 
   const selectedSlot = deliverySlots.find((s) => s.id === selectedSlotId) ?? null;
 
@@ -143,6 +158,19 @@ export default function CheckoutPage() {
         // (confirmado) atomically alongside the order itself.
         statusEvents: [{ status: "confirmado", createdAt: result.createdAt }],
       };
+      trackEvent("PURCHASE_COMPLETED", {
+        metadata: {
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          itemCount: order.items.length,
+          total: order.total,
+        },
+      });
+      // Must fire before clearCart() below — see
+      // server/analytics/cart-snapshot.ts's markCartRecovered comment for
+      // why this needs to land before the empty-cart syncCartSnapshot
+      // that clearCart() triggers moments later.
+      recoverCartSnapshot(order.id);
       setConfirmedOrder(order);
       setCurrentStep(3);
       clearCart();

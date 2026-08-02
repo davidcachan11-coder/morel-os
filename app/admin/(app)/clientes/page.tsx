@@ -1,19 +1,65 @@
-import { Users } from "lucide-react";
-import { PlaceholderPage } from "@/components/admin/placeholder-page";
+import { createServerCaller } from "@/server/trpc/caller";
+import { CustomerSearchBar } from "@/components/admin/clientes/customer-search-bar";
+import { CustomersTable } from "@/components/admin/clientes/customers-table";
+import { Pagination } from "@/components/admin/orders/pagination";
 
-export default function ClientesPage() {
+const PAGE_SIZE = 20;
+
+export default async function ClientesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ search?: string; page?: string }>;
+}) {
+  const params = await searchParams;
+  const search = params.search?.trim() ?? "";
+  const page = Math.max(Number(params.page) || 1, 1);
+
+  const trpc = await createServerCaller();
+  const { customers, total, pageSize } = await trpc.customers.list({
+    search: search || undefined,
+    page,
+    pageSize: PAGE_SIZE,
+  });
+
+  function buildHref(overrides: Record<string, string | undefined>) {
+    const next = new URLSearchParams();
+    if (search) next.set("search", search);
+    if (page !== 1) next.set("page", String(page));
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) next.delete(key);
+      else next.set(key, value);
+    }
+    return `/admin/clientes?${next.toString()}`;
+  }
+
   return (
-    <PlaceholderPage
-      icon={Users}
-      title="Clientes"
-      description="Base de clientes — quién compra, con qué frecuencia y su historial completo."
-      plannedItems={[
-        "Listado y búsqueda de clientes con historial de pedidos.",
-        "Cohortes de retención y tasa de recompra a lo largo del tiempo.",
-        "Patrones de preferencia de sustitución por cliente.",
-        "Seguimiento de soporte/reclamos (todavía no existe ningún canal de soporte en la app).",
-      ]}
-      dataNote="Las métricas agregadas de clientes (nuevos, activos, recurrentes, gasto promedio, clientes más valiosos) ya son reales y están en Analítica. Esta sección es la vista de cliente individual con historial, todavía no construida."
-    />
+    <div className="flex flex-1 flex-col bg-background">
+      <div className="border-b border-border bg-card">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-8 sm:px-6 lg:px-8">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+              Clientes
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Base de clientes — quién compra, con qué frecuencia y su historial completo.
+            </p>
+          </div>
+          <CustomerSearchBar initialValue={search} />
+        </div>
+      </div>
+
+      <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
+        <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
+          <CustomersTable customers={customers} />
+        </div>
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          buildHref={(p) => buildHref({ page: p === 1 ? undefined : String(p) })}
+          itemLabel="clientes"
+        />
+      </div>
+    </div>
   );
 }
