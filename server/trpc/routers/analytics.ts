@@ -156,23 +156,32 @@ export const analyticsRouter = router({
       return { granularity, points, peak };
     }),
 
-  // Phase 3: product performance. Revenue here is an ESTIMATE (quantity ×
-  // current Product.price) — OrderItem does not snapshot the price at
-  // order time, only quantity, so a price change since an order would
-  // skew this. Ranked by quantity (exact) as the primary signal;
-  // estimatedRevenue is secondary and labeled as such by the caller.
-  // Also thin by data, not by query correctness: only one seeded order has
+  // Phase 3 / Analytics depth: product performance. Revenue here is an
+  // ESTIMATE (quantity × current Product.price) — OrderItem does not
+  // snapshot the price at order time, only quantity, so a price change
+  // since an order would skew this; sortBy defaults to "quantity" (exact)
+  // for that reason, with "revenue" (estimated) available as an explicit,
+  // labeled alternative rather than the default. Sorting happens in
+  // memory rather than via Prisma's groupBy orderBy because
+  // estimatedRevenue isn't a database column — it's computed after the
+  // join to Product, same as the estimate itself. Fine at this data
+  // volume (a handful of distinct products); would need revisiting if the
+  // catalog's per-period distinct-product count ever grew large. Also
+  // thin by data, not by query correctness: only one seeded order has
   // real OrderItem rows today (see docs/DECISIONS.md's Admin Platform entry).
   getTopProducts: protectedProcedure()
-    .input(analyticsInput.extend({ limit: z.number().int().positive().max(50).default(10) }))
+    .input(
+      analyticsInput.extend({
+        limit: z.number().int().positive().max(50).default(10),
+        sortBy: z.enum(["quantity", "revenue"]).default("quantity"),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const { current } = resolvePeriodRanges(input.period);
       const grouped = await ctx.prisma.orderItem.groupBy({
         by: ["productId"],
         where: { order: orderWhere(current, input.branchId) },
         _sum: { quantity: true },
-        orderBy: { _sum: { quantity: "desc" } },
-        take: input.limit,
       });
       if (grouped.length === 0) return [];
 
@@ -182,7 +191,7 @@ export const analyticsRouter = router({
       });
       const productById = new Map(products.map((p) => [p.id, p]));
 
-      return grouped
+      const rows = grouped
         .map((g) => {
           const product = productById.get(g.productId);
           const quantity = g._sum.quantity ? Number(g._sum.quantity) : 0;
@@ -197,10 +206,19 @@ export const analyticsRouter = router({
             : null;
         })
         .filter((x): x is NonNullable<typeof x> => x !== null);
+
+      rows.sort((a, b) =>
+        input.sortBy === "revenue"
+          ? b.estimatedRevenue - a.estimatedRevenue
+          : b.quantity - a.quantity
+      );
+
+      return rows.slice(0, input.limit);
     }),
 
-  // Phase 3: category-level sales distribution. Same estimated-revenue and
-  // data-thinness caveats as getTopProducts above.
+  // Phase 3 / Analytics depth: category-level sales distribution, plus
+  // each category's share of total estimated revenue. Same
+  // estimated-revenue and data-thinness caveats as getTopProducts above.
   getCategoryPerformance: protectedProcedure()
     .input(analyticsInput)
     .query(async ({ ctx, input }) => {
@@ -227,8 +245,14 @@ export const analyticsRouter = router({
         byCategory.set(category.id, entry);
       }
 
+      const totalRevenue = [...byCategory.values()].reduce((sum, c) => sum + c.estimatedRevenue, 0);
+
       return [...byCategory.entries()]
-        .map(([categoryId, v]) => ({ categoryId, ...v }))
+        .map(([categoryId, v]) => ({
+          categoryId,
+          ...v,
+          share: totalRevenue > 0 ? (v.estimatedRevenue / totalRevenue) * 100 : 0,
+        }))
         .sort((a, b) => b.estimatedRevenue - a.estimatedRevenue);
     }),
 
@@ -280,11 +304,38 @@ export const analyticsRouter = router({
           : [];
       const spenderById = new Map(spenderCustomers.map((c) => [c.id, c]));
 
+      // Purchase frequency and order-count distribution are lifetime
+      // figures (like topCustomers above), not period-scoped — "how often
+      // does a customer come back" isn't a question a single period window
+      // can answer on its own.
+      const allCustomerOrderCounts = await ctx.prisma.order.groupBy({
+        by: ["customerId"],
+        _count: { _all: true },
+      });
+      const totalCustomersWithOrders = allCustomerOrderCounts.length;
+      const totalLifetimeOrders = allCustomerOrderCounts.reduce(
+        (sum, c) => sum + c._count._all,
+        0
+      );
+      const purchaseFrequency =
+        totalCustomersWithOrders > 0 ? totalLifetimeOrders / totalCustomersWithOrders : null;
+
+      const orderCountDistribution = { one: 0, two: 0, three: 0, fourPlus: 0 };
+      for (const c of allCustomerOrderCounts) {
+        const n = c._count._all;
+        if (n === 1) orderCountDistribution.one += 1;
+        else if (n === 2) orderCountDistribution.two += 1;
+        else if (n === 3) orderCountDistribution.three += 1;
+        else orderCountDistribution.fourPlus += 1;
+      }
+
       return {
         newCustomers,
         activeCustomers: periodCustomerIds.length,
         returningCustomers: returningInPeriod,
         averageSpend,
+        purchaseFrequency,
+        orderCountDistribution,
         topCustomers: topSpenders
           .map((s) => {
             const customer = spenderById.get(s.customerId);
@@ -345,39 +396,59 @@ export const analyticsRouter = router({
       };
     }),
 
-  // Executive Dashboard: revenue/orders per branch, for comparing branches
-  // against each other — deliberately ignores any single-branch filter
-  // (that's the whole point of this view). Real, not speculative: the seed
-  // data genuinely spans 3 Branch rows.
+  // Executive Dashboard + Analytics: revenue/orders per branch, for
+  // comparing branches against each other — deliberately ignores any
+  // single-branch filter (that's the whole point of this view). Real, not
+  // speculative: the seed data genuinely spans 3 Branch rows.
+  //
+  // Additive fields (aov, revenueDeltaPct, ordersDeltaPct) were added for
+  // Analytics' deeper branch-comparison table without changing the shape
+  // the Dashboard's compact BranchPerformanceList already consumes — that
+  // component only reads branchId/name/revenue/orders/share and ignores
+  // the rest, so this stays backward-compatible.
   getBranchPerformance: protectedProcedure()
     .input(z.object({ period: z.enum(ANALYTICS_PERIODS).default("30d") }))
     .query(async ({ ctx, input }) => {
-      const { current } = resolvePeriodRanges(input.period);
-      const [branches, grouped] = await Promise.all([
-        ctx.prisma.branch.findMany({ select: { id: true, name: true } }),
-        ctx.prisma.order.groupBy({
+      const { current, previous } = resolvePeriodRanges(input.period);
+
+      function groupFor(range: DateRange) {
+        return ctx.prisma.order.groupBy({
           by: ["branchId"],
-          where: { createdAt: { gte: current.start, lt: current.end } },
+          where: { createdAt: { gte: range.start, lt: range.end } },
           _sum: { total: true },
           _count: { _all: true },
-        }),
+        });
+      }
+
+      const [branches, currGrouped, prevGrouped] = await Promise.all([
+        ctx.prisma.branch.findMany({ select: { id: true, name: true } }),
+        groupFor(current),
+        groupFor(previous),
       ]);
-      const byBranchId = new Map(grouped.map((g) => [g.branchId, g]));
-      const totalRevenue = grouped.reduce(
+      const currByBranchId = new Map(currGrouped.map((g) => [g.branchId, g]));
+      const prevByBranchId = new Map(prevGrouped.map((g) => [g.branchId, g]));
+      const totalRevenue = currGrouped.reduce(
         (sum, g) => sum + (g._sum.total ? Number(g._sum.total) : 0),
         0
       );
 
       return branches
         .map((branch) => {
-          const g = byBranchId.get(branch.id);
-          const revenue = g?._sum.total ? Number(g._sum.total) : 0;
+          const currG = currByBranchId.get(branch.id);
+          const prevG = prevByBranchId.get(branch.id);
+          const revenue = currG?._sum.total ? Number(currG._sum.total) : 0;
+          const orders = currG?._count._all ?? 0;
+          const prevRevenue = prevG?._sum.total ? Number(prevG._sum.total) : 0;
+          const prevOrders = prevG?._count._all ?? 0;
           return {
             branchId: branch.id,
             name: branch.name,
             revenue,
-            orders: g?._count._all ?? 0,
+            orders,
+            aov: orders > 0 ? revenue / orders : null,
             share: totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0,
+            revenueDeltaPct: computeDeltaPct(revenue, prevRevenue),
+            ordersDeltaPct: computeDeltaPct(orders, prevOrders),
           };
         })
         .sort((a, b) => b.revenue - a.revenue);

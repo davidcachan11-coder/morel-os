@@ -2020,3 +2020,106 @@ what was explicitly approved at each step.
   against `window.location.href` and DOM reads directly. Treat a
   suspicious `get_page_text` result as unverified until cross-checked,
   rather than concluding the app failed to navigate.
+
+---
+
+## 2026-08-02 — Analytics module depth
+
+**Decision:** Deepen `/admin/analitica` into a real business-intelligence
+module — sales analysis with period-over-period comparison, sortable
+product performance, category revenue share, a cross-branch comparison
+table, and customer purchase-frequency/distribution — while the
+Dashboard (`/admin`) stays the executive overview and gets no new
+widgets. Every addition extends existing, already-reviewed
+`analyticsRouter` procedures rather than introducing parallel ones, and
+every extension is additive/backward-compatible with the Dashboard's
+existing calls (confirmed by rebuilding and re-testing the Dashboard
+after each backend change, not assumed).
+
+**`getBranchPerformance`** gained `aov` and period-over-period
+`revenueDeltaPct`/`ordersDeltaPct` per branch — the Dashboard's compact
+`BranchPerformanceList` only reads `branchId`/`name`/`revenue`/`orders`/
+`share` and ignores the rest, so it needed no changes.
+
+**`getTopProducts`** gained a `sortBy: "quantity" | "revenue"` input
+(default `"quantity"`, matching prior behavior exactly, so the
+Dashboard's call — which doesn't pass `sortBy` — is unaffected). Sorting
+moved from Prisma's `groupBy` `orderBy` to an in-memory sort after the
+join to `Product`, since `estimatedRevenue` isn't a real column to sort
+by at the database level — the same estimation this router has used
+since Sprint 5's Admin Platform entry. Fine at current data volume (a
+handful of distinct products); would need revisiting only if the
+per-period distinct-product count grew large enough for the full
+`groupBy` result set to become expensive to hold in memory.
+
+**`getCategoryPerformance`** gained `share` (% of total estimated
+revenue). **`getCustomerStats`** gained `purchaseFrequency` (lifetime
+average orders per customer) and `orderCountDistribution` (1/2/3/4+
+order buckets) — both lifetime-scoped like the existing `topCustomers`,
+for the same reason: "how often does a customer come back" isn't a
+question a single period window can answer alone.
+
+**New Analytics-only components**, deliberately distinct from their
+Dashboard counterparts rather than shared/parameterized, so the two
+pages don't visually read as the same widget twice: `sales-summary-strip.tsx`
+(dense inline comparison row, not another `KpiCard` grid),
+`branch-comparison-table.tsx` (a real table — revenue, Δ, orders, Δ, AOV,
+share — versus the Dashboard's compact bars), `sort-toggle.tsx` (same
+Link-based, no-client-JS pattern as `PeriodSelector`).
+
+**Caught during verification, fixed before finishing:** the new sales
+summary strip didn't inherit the Dashboard's "avoid a wall of zeros"
+empty-state treatment (`docs/DECISIONS.md`'s Executive Dashboard
+refinement entry). When both the current and previous period have zero
+orders, `computeDeltaPct`'s both-zero case correctly returns a real `0%`
+— but rendering "$0 · 0% vs. período anterior" reads exactly like the
+broken-looking state already fixed on the Dashboard. Added the same
+"Esperando actividad" empty state here, gated on
+`summary.orders.value === 0`, before considering this done.
+
+**Future analytics work that needs new data models first — flagged, not
+built speculatively or worked around with an estimate:**
+- **Exact revenue attribution** requires snapshotting `Product.price` (and
+  ideally applicable discount) onto `OrderItem` at order time.
+  `getTopProducts`/`getCategoryPerformance` currently estimate revenue as
+  quantity × *current* price, which drifts from historical fact the
+  moment a price changes — clearly labeled as an estimate throughout the
+  UI, not silently treated as exact. A `priceAtOrder` (or similar)
+  column on `OrderItem` is the fix; deferred because it's a schema change
+  with migration/backfill implications beyond this phase's scope.
+- **Product cost/margin data** — no cost basis exists anywhere in the
+  schema (`Product` has `price` only). Margin, profitability-by-category,
+  and true unit economics are not answerable questions today; a
+  `Product.cost` field (or a versioned cost-history table, if costs
+  change independently of price) would need to land before any
+  margin-flavored metric could be built without guessing.
+- **Advanced customer segmentation** (RFM scoring, cohort retention
+  curves beyond the current lifetime order-count distribution,
+  behavior-based segments) needs either a larger, more temporally
+  spread-out real order history than exists today, or a dedicated
+  `CustomerSegment`/cohort-tracking model — the current 20-customer,
+  single-day seed dataset can't support anything beyond what's already
+  built without the numbers becoming more noise than signal.
+- **Behavioral tracking / customer intelligence** (browsing behavior,
+  cart abandonment, substitution acceptance/rejection patterns feeding
+  back into a real "substitution risk" signal — `DASHBOARD_SPEC.md`'s AI
+  Operations Center vision) has no event-tracking model at all yet
+  (`docs/DASHBOARD_SPEC.md` §8 already names this as the deliberately
+  last module to build, dependent on every other module having real data
+  first). Nothing here should be built against synthetic events.
+
+**Verification performed:**
+- `tsc --noEmit`, `eslint`, `next build` clean after every change,
+  including a final full rebuild.
+- Full browser walkthrough with real login (not curl/fetch) against the
+  live database: sort toggle re-ordering cross-checked against direct
+  `psql` values (quantity vs. estimated-revenue orderings differ exactly
+  where expected), branch filter confirmed to scope every section except
+  the intentionally-unfiltered branch-comparison table, mobile (375px)
+  layout confirmed including the comparison table's horizontal-scroll
+  overflow, Dashboard fully re-tested afterward and confirmed unaffected
+  by every backend change, no console errors anywhere.
+- The zero-orders empty-state gap above was caught by this same
+  browser verification pass (testing the "Hoy" period, which by real
+  elapsed time now has zero current *and* zero previous orders) — not
+  found by code review alone.

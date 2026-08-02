@@ -1,8 +1,11 @@
-import { TrendingUp } from "lucide-react";
+import { Inbox, TrendingUp } from "lucide-react";
 import { RevenueTrendChart } from "@/components/admin/revenue-trend-chart";
 import { TopProductsList } from "@/components/admin/top-products-list";
 import { CategoryPerformanceList } from "@/components/admin/category-performance-list";
 import { CustomerStatsPanel } from "@/components/admin/customer-stats-panel";
+import { BranchComparisonTable } from "@/components/admin/branch-comparison-table";
+import { SalesSummaryStrip, type SalesSummaryStat } from "@/components/admin/sales-summary-strip";
+import { SortToggle } from "@/components/admin/sort-toggle";
 import { PeriodSelector } from "@/components/admin/period-selector";
 import { BranchSelector } from "@/components/admin/branch-selector";
 import { createServerCaller } from "@/server/trpc/caller";
@@ -15,6 +18,12 @@ function parsePeriod(value: string | undefined): AnalyticsPeriod {
     : "30d";
 }
 
+type ProductSort = "quantity" | "revenue";
+
+function parseProductSort(value: string | undefined): ProductSort {
+  return value === "revenue" ? "revenue" : "quantity";
+}
+
 function formatPeakLabel(bucket: string, granularity: "hour" | "day"): string {
   if (granularity === "hour") return `${bucket.slice(11, 13)}:00`;
   const [, month, day] = bucket.split("-");
@@ -24,23 +33,54 @@ function formatPeakLabel(bucket: string, granularity: "hour" | "day"): string {
 export default async function AnaliticaPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string; branch?: string }>;
+  searchParams: Promise<{ period?: string; branch?: string; sort?: string }>;
 }) {
   const params = await searchParams;
   const period = parsePeriod(params.period);
   const branchId = params.branch || undefined;
+  const productSort = parseProductSort(params.sort);
 
   const trpc = await createServerCaller();
-  const [revenueTrend, topProducts, categoryPerformance, customerStats, branches] =
-    await Promise.all([
-      trpc.analytics.getRevenueTrend({ period, branchId }),
-      trpc.analytics.getTopProducts({ period, branchId, limit: 8 }),
-      trpc.analytics.getCategoryPerformance({ period, branchId }),
-      trpc.analytics.getCustomerStats({ period, branchId }),
-      trpc.analytics.listBranches(),
-    ]);
+  const [
+    summary,
+    revenueTrend,
+    topProducts,
+    categoryPerformance,
+    customerStats,
+    branchComparison,
+    branches,
+  ] = await Promise.all([
+    trpc.analytics.getSummary({ period, branchId }),
+    trpc.analytics.getRevenueTrend({ period, branchId }),
+    trpc.analytics.getTopProducts({ period, branchId, limit: 8, sortBy: productSort }),
+    trpc.analytics.getCategoryPerformance({ period, branchId }),
+    trpc.analytics.getCustomerStats({ period, branchId }),
+    trpc.analytics.getBranchPerformance({ period }),
+    trpc.analytics.listBranches(),
+  ]);
 
   const hasItemizedSales = topProducts.length > 0 || categoryPerformance.length > 0;
+
+  const salesStats: SalesSummaryStat[] = [
+    {
+      label: "Ingresos totales",
+      value: formatCurrency(summary.revenue.value),
+      deltaPct: summary.revenue.deltaPct,
+    },
+    {
+      label: "Pedidos",
+      value: String(summary.orders.value),
+      deltaPct: summary.orders.deltaPct,
+    },
+    {
+      label: "Ticket promedio",
+      value:
+        summary.averageOrderValue.value !== null
+          ? formatCurrency(summary.averageOrderValue.value)
+          : "—",
+      deltaPct: summary.averageOrderValue.deltaPct,
+    },
+  ];
 
   return (
     <div className="flex flex-1 flex-col bg-background">
@@ -66,35 +106,69 @@ export default async function AnaliticaPage({
       </div>
 
       <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
-        <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
-          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-foreground">Ingresos y pedidos</h2>
-            {revenueTrend.peak && (
-              <span className="flex items-center gap-1.5 rounded-full bg-brand-green/15 px-2.5 py-1 text-xs font-medium text-brand-green-dark">
-                <TrendingUp className="h-3 w-3" />
-                Pico:{" "}
-                {formatPeakLabel(revenueTrend.peak.bucket, revenueTrend.granularity)} —{" "}
-                {formatCurrency(revenueTrend.peak.revenue)}
-              </span>
+        <section className="flex flex-col gap-4">
+          <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            Análisis de ventas
+          </h2>
+          {summary.orders.value === 0 ? (
+            // Same reasoning as the Dashboard's KPI-row empty state: when
+            // both the current AND previous period have zero orders,
+            // computeDeltaPct's both-zero case is a real "0%" — correct
+            // math, but "$0 · 0% vs. período anterior" reads as broken,
+            // not as "no activity yet." Say it once instead.
+            <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-card/60 px-6 py-12 text-center">
+              <Inbox className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-medium text-foreground">Esperando actividad</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                No se registraron pedidos en este período. El análisis va a aparecer apenas haya
+                actividad.
+              </p>
+            </div>
+          ) : (
+            <SalesSummaryStrip stats={salesStats} />
+          )}
+
+          <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-foreground">Ingresos y pedidos</h3>
+              {revenueTrend.peak && (
+                <span className="flex items-center gap-1.5 rounded-full bg-brand-green/15 px-2.5 py-1 text-xs font-medium text-brand-green-dark">
+                  <TrendingUp className="h-3 w-3" />
+                  Pico: {formatPeakLabel(revenueTrend.peak.bucket, revenueTrend.granularity)} —{" "}
+                  {formatCurrency(revenueTrend.peak.revenue)}
+                </span>
+              )}
+            </div>
+            <p className="mb-4 text-xs text-muted-foreground">
+              Barras: ingresos · Línea: cantidad de pedidos
+            </p>
+            {revenueTrend.points.length === 0 ? (
+              <p className="py-16 text-center text-sm text-muted-foreground">
+                Sin datos para este período.
+              </p>
+            ) : (
+              <RevenueTrendChart points={revenueTrend.points} granularity={revenueTrend.granularity} />
             )}
           </div>
-          <p className="mb-4 text-xs text-muted-foreground">
-            Barras: ingresos · Línea: cantidad de pedidos
-          </p>
-          {revenueTrend.points.length === 0 ? (
-            <p className="py-16 text-center text-sm text-muted-foreground">
-              Sin pedidos en el período seleccionado.
-            </p>
-          ) : (
-            <RevenueTrendChart points={revenueTrend.points} granularity={revenueTrend.granularity} />
-          )}
-        </div>
+        </section>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
-            <h2 className="mb-1 text-sm font-semibold text-foreground">Productos más vendidos</h2>
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-foreground">Desempeño de productos</h2>
+              <SortToggle
+                options={[
+                  { value: "quantity", label: "Por unidades" },
+                  { value: "revenue", label: "Por ingresos" },
+                ]}
+                current={productSort}
+                paramName="sort"
+                basePath="/admin/analitica"
+                extraParams={{ period, branch: branchId }}
+              />
+            </div>
             <p className="mb-4 text-xs text-muted-foreground">
-              Ranking por unidades vendidas · ingresos estimados al precio actual
+              Unidades vendidas exactas · ingresos estimados al precio actual
             </p>
             <TopProductsList products={topProducts} />
           </div>
@@ -108,7 +182,7 @@ export default async function AnaliticaPage({
             </p>
             <CategoryPerformanceList categories={categoryPerformance} />
           </div>
-        </div>
+        </section>
 
         {!hasItemizedSales && (
           <p className="text-xs text-muted-foreground">
@@ -119,10 +193,18 @@ export default async function AnaliticaPage({
           </p>
         )}
 
-        <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
+        <section className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
+          <h2 className="mb-1 text-sm font-semibold text-foreground">Comparación por sucursal</h2>
+          <p className="mb-4 text-xs text-muted-foreground">
+            Todo el período, sin filtro de sucursal — para comparar sucursales entre sí
+          </p>
+          <BranchComparisonTable branches={branchComparison} />
+        </section>
+
+        <section className="rounded-2xl border border-border/70 bg-card p-5 shadow-soft">
           <h2 className="mb-4 text-sm font-semibold text-foreground">Comportamiento de clientes</h2>
           <CustomerStatsPanel stats={customerStats} />
-        </div>
+        </section>
       </div>
     </div>
   );

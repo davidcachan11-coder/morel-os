@@ -1,3 +1,4 @@
+import { Inbox } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 
 export interface CategoryPerformance {
@@ -5,6 +6,7 @@ export interface CategoryPerformance {
   name: string;
   quantity: number;
   estimatedRevenue: number;
+  share: number;
 }
 
 export function CategoryPerformanceList({
@@ -14,9 +16,13 @@ export function CategoryPerformanceList({
 }) {
   if (categories.length === 0) {
     return (
-      <p className="py-8 text-center text-sm text-muted-foreground">
-        Sin ventas con detalle de categoría en el período seleccionado.
-      </p>
+      <div className="flex flex-col items-center gap-1 py-8 text-center">
+        <Inbox className="h-6 w-6 text-muted-foreground" />
+        <p className="mt-2 text-sm font-medium text-foreground">Sin datos para este período</p>
+        <p className="text-xs text-muted-foreground">
+          Ninguna categoría tiene detalle de venta todavía en este período.
+        </p>
+      </div>
     );
   }
 
@@ -29,7 +35,8 @@ export function CategoryPerformanceList({
           <div className="mb-1 flex items-center justify-between text-sm">
             <span className="font-medium text-foreground">{category.name}</span>
             <span className="text-muted-foreground">
-              {formatCurrency(category.estimatedRevenue)} · {category.quantity} un.
+              {formatCurrency(category.estimatedRevenue)} · {category.quantity} un. ·{" "}
+              {category.share.toFixed(0)}%
             </span>
           </div>
           <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
