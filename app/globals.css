@@ -81,8 +81,14 @@
   --brand-navy: oklch(0.28 0.09 267);
   --brand-navy-light: oklch(0.38 0.1 267);
   --brand-indigo: oklch(0.52 0.19 267);
-  --brand-green: oklch(0.64 0.16 152);
-  --brand-green-dark: oklch(0.5 0.15 152);
+  /* Morel brand green, corrected 2026-08-03: the prior #2A5C1D/#1F4A16
+     pair (itself a fix for an earlier too-pastel oklch green) read as
+     "forest/blackish" per direct feedback — not fresh enough for a
+     produce brand. This pair is fresher/brighter while staying a real,
+     trustworthy green (not mint/pastel). Exact hex values as specified,
+     not re-derived into oklch, so they match precisely. */
+  --brand-green: #2A8C3A;
+  --brand-green-dark: #1F6F2D;
   --brand-orange: oklch(0.7 0.17 55);
   --brand-orange-dark: oklch(0.62 0.18 45);
 
@@ -116,6 +122,16 @@
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+  /* Sprint 7 (Premium Storefront Redesign) — additive only, no existing
+     token values changed (the Admin Platform shares this file). Large
+     display headlines (hero/section titles) read as premium with
+     noticeably tighter tracking than body text at the same weight —
+     this is the one typography primitive later phases are expected to
+     lean on; no new font family/size tokens invented ahead of actual
+     need. */
+  .tracking-display {
+    letter-spacing: -0.02em;
   }
   .bg-noise {
     background-image: radial-gradient(circle at 1px 1px, rgba(0,0,0,0.035) 1px, transparent 0);

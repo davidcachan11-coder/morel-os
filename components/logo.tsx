@@ -1,20 +1,27 @@
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 
-export function Logo({ className, dark }: { className?: string; dark?: boolean }) {
+/**
+ * Official Morel logo. Same source artwork the brand provided
+ * (public/images/brand/morel-logo.png, untouched) — this file
+ * (morel-logo-trimmed.png) is a mechanical `sharp().trim()` crop of it,
+ * removing the large flat-white margin the original PNG shipped with.
+ * Trim only deletes uniform-background border pixels; it does not
+ * redraw, recolor, or reshape the mark or wordmark, and the crop was
+ * verified by eye against the original (public/images/brand/morel-logo.png
+ * is kept on disk for that comparison). Result: 444×378, a much more
+ * header-appropriate ratio than the original 1054×1492 (which was mostly
+ * whitespace above/below the actual mark).
+ */
+export function Logo({ className }: { className?: string }) {
   return (
-    <div className={cn("flex items-center gap-2", className)}>
-      <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-brand-navy shadow-soft">
-        <span className="text-sm font-bold text-white">M</span>
-        <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-brand-green ring-2 ring-background" />
-      </div>
-      <span
-        className={cn(
-          "text-lg font-semibold tracking-tight",
-          dark ? "text-white" : "text-foreground"
-        )}
-      >
-        Morel <span className="font-normal text-muted-foreground">OS</span>
-      </span>
-    </div>
+    <Image
+      src="/images/brand/morel-logo-trimmed.png"
+      alt="Supermercado Morel"
+      width={444}
+      height={378}
+      priority
+      className={cn("h-12 w-auto sm:h-14", className)}
+    />
   );
 }

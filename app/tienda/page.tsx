@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Search, X } from "lucide-react";
 import { categories, products, type CategoryId } from "@/data/catalog";
 import { ProductCard } from "@/components/tienda/product-card";
@@ -13,9 +14,39 @@ import { trackEvent } from "@/lib/analytics-client";
 // real search intent, not every intermediate substring.
 const SEARCH_DEBOUNCE_MS = 600;
 
-export default function TiendaPage() {
+function parseCategoryParam(value: string | null): CategoryId | "todas" {
+  const match = value && categories.find((c) => c.id === value);
+  return match ? match.id : "todas";
+}
+
+// useSearchParams() (for the ?categoria= entry point from the homepage's
+// category-discovery cards) requires a Suspense boundary — split out so
+// the default export below can provide one without changing anything
+// about this component's own behavior.
+function TiendaContent() {
+  const searchParams = useSearchParams();
+  // Lazy initializer: only read the URL once, on mount — this is an entry
+  // point (e.g. from the homepage's category-discovery cards), not a
+  // live-synced filter; the chips below are the source of truth for
+  // subsequent changes, same as before this param existed.
+  const [activeCategory, setActiveCategory] = useState<CategoryId | "todas">(() =>
+    parseCategoryParam(searchParams.get("categoria"))
+  );
   const [query, setQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState<CategoryId | "todas">("todas");
+
+  // Fires once, only when the visitor actually arrived via a category
+  // link (not on every mount) — the manual chip click below already
+  // fires this same event for in-page selection.
+  const hasTrackedInitialCategory = useRef(false);
+  useEffect(() => {
+    if (hasTrackedInitialCategory.current) return;
+    hasTrackedInitialCategory.current = true;
+    if (activeCategory !== "todas") {
+      trackEvent("CATEGORY_VIEW", { categoryId: activeCategory });
+    }
+    // Intentionally runs once on mount only — see comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     return products.filter((p) => {
@@ -88,8 +119,8 @@ export default function TiendaPage() {
               className={cn(
                 "rounded-full border px-4 py-1.5 text-sm font-medium transition-colors",
                 activeCategory === "todas"
-                  ? "border-brand-navy bg-brand-navy text-white"
-                  : "border-border bg-background text-muted-foreground hover:border-brand-navy/40 hover:text-foreground"
+                  ? "border-brand-green bg-brand-green text-white"
+                  : "border-border bg-background text-muted-foreground hover:border-brand-green/40 hover:text-foreground"
               )}
             >
               Todas
@@ -122,7 +153,7 @@ export default function TiendaPage() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-3 sm:gap-x-8 lg:grid-cols-4 xl:grid-cols-5">
             {filtered.map((product) => (
               <ProductCard key={product.id} product={product} />
             ))}
@@ -130,5 +161,13 @@ export default function TiendaPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function TiendaPage() {
+  return (
+    <Suspense>
+      <TiendaContent />
+    </Suspense>
   );
 }

@@ -234,7 +234,7 @@ export default function CheckoutPage() {
                     i < currentStep
                       ? "bg-brand-green text-white"
                       : i === currentStep
-                      ? "bg-brand-navy text-white"
+                      ? "bg-white text-brand-green ring-2 ring-brand-green"
                       : "bg-secondary text-muted-foreground"
                   )}
                 >
@@ -296,7 +296,7 @@ export default function CheckoutPage() {
                 <div className="mt-6 flex justify-end">
                   <Button
                     size="lg"
-                    className="rounded-full bg-brand-navy px-8 text-white hover:bg-brand-navy-light"
+                    className="rounded-full bg-brand-green px-8 text-white hover:bg-brand-green-dark"
                     onClick={() => setCurrentStep(1)}
                   >
                     Continuar
@@ -394,8 +394,8 @@ export default function CheckoutPage() {
                           className={cn(
                             "flex flex-col items-start rounded-xl border p-3.5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-50",
                             selected
-                              ? "border-brand-navy bg-brand-navy/5 shadow-soft"
-                              : "border-border hover:border-brand-navy/40"
+                              ? "border-brand-green bg-brand-green/5 shadow-soft"
+                              : "border-border hover:border-brand-green/40"
                           )}
                         >
                           <div className="flex w-full items-center justify-between">
@@ -437,7 +437,7 @@ export default function CheckoutPage() {
                   <Button
                     size="lg"
                     disabled={!selectedSlotId || !customerValid}
-                    className="rounded-full bg-brand-navy px-8 text-white hover:bg-brand-navy-light"
+                    className="rounded-full bg-brand-green px-8 text-white hover:bg-brand-green-dark"
                     onClick={() => setCurrentStep(2)}
                   >
                     Continuar
@@ -520,7 +520,7 @@ export default function CheckoutPage() {
                     size="lg"
                     disabled={!paymentValid || isSubmitting}
                     onClick={handlePay}
-                    className="rounded-full bg-brand-navy px-8 text-white hover:bg-brand-navy-light"
+                    className="rounded-full bg-brand-green px-8 text-white hover:bg-brand-green-dark"
                   >
                     {isSubmitting ? (
                       <>
@@ -545,9 +545,9 @@ export default function CheckoutPage() {
               >
                 <div className="mx-auto flex max-w-lg flex-col items-center rounded-3xl border border-border/70 bg-card px-6 py-12 text-center shadow-soft-lg">
                   <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ type: "spring", stiffness: 260, damping: 18, delay: 0.1 }}
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ duration: 0.6, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
                     className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-green/15"
                   >
                     <CheckCircle2 className="h-8 w-8 text-brand-green-dark" />
@@ -599,7 +599,7 @@ export default function CheckoutPage() {
                       </Button>
                     </Link>
                     <Button
-                      className="w-full rounded-full bg-brand-navy text-white hover:bg-brand-navy-light"
+                      className="w-full rounded-full bg-brand-green text-white hover:bg-brand-green-dark"
                       onClick={() => router.push(`/pedido/${confirmedOrder.id}`)}
                     >
                       Ver seguimiento en vivo

@@ -155,7 +155,7 @@ export function CartDrawer() {
               </div>
               <Separator />
               <Link href="/tienda/checkout" className="w-full" onClick={closeDrawer}>
-                <Button size="lg" className="w-full rounded-full bg-brand-navy text-white hover:bg-brand-navy-light">
+                <Button size="lg" className="w-full rounded-full bg-brand-green text-white hover:bg-brand-green-dark">
                   Continuar compra
                 </Button>
               </Link>

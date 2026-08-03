@@ -1,0 +1,30 @@
+<svg width="900" height="900" viewBox="0 0 900 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="formGradient" cx="38%" cy="32%" r="75%">
+      <stop offset="0%" stop-color="#f2c879"/>
+      <stop offset="45%" stop-color="#d99a4a"/>
+      <stop offset="80%" stop-color="#a85f34"/>
+      <stop offset="100%" stop-color="#6e3d24"/>
+    </radialGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="45"/>
+    </filter>
+    <radialGradient id="highlight" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fff6e6" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#fff6e6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- soft ambient glow behind the form -->
+  <ellipse cx="450" cy="460" rx="340" ry="320" fill="#d99a4a" opacity="0.35" filter="url(#glow)"/>
+
+  <!-- the form itself — an organic, asymmetric shape, deliberately not a
+       circle (a perfect circle reads as a UI badge/icon, not an object) -->
+  <path
+    d="M448,118 C610,108 758,215 792,392 C826,569 738,742 566,796 C394,850 208,780 138,616 C68,452 118,262 268,178 C328,144 388,122 448,118 Z"
+    fill="url(#formGradient)"
+  />
+
+  <!-- soft rim highlight, upper-left, suggesting a single warm light source -->
+  <ellipse cx="330" cy="300" rx="150" ry="110" fill="url(#highlight)"/>
+</svg>

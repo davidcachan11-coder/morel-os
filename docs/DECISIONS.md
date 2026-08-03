@@ -2437,3 +2437,184 @@ this foundation, not part of it.
   `itemLabel` prop (default `"pedidos"`, unchanged for existing callers)
   rather than a duplicate component, since reusing it for the new
   Clientes list would otherwise have hardcoded the wrong noun.
+
+---
+
+## 2026-08-02 — Hero macro photography direction (creative brief, not yet built)
+
+**Status:** Direction approved and preserved here; the actual imagery is
+NOT built — no image-generation tool exists in this environment, and
+attempting to fake this with hand-authored SVG/CSS would produce exactly
+the "plastic/cartoon" look the brief explicitly rejects. What *is* built:
+the scroll-driven progressive-zoom mechanism (`HeroContent.revealStages`,
+`content/types.ts`; `HeroRevealStageLayer`,
+`components/homepage/hero-section.tsx`) that activates automatically the
+moment 2+ real staged images exist — nothing about this brief should be
+lost or re-derived when someone eventually sources those assets.
+
+**The brief, verbatim intent:**
+
+Fresh produce shown in extreme close-up, luxury product-photography
+quality. The camera should capture: water droplets on the skin of fruits;
+natural texture and pores; tiny imperfections that make produce feel
+real; glossy reflections; fresh cut surfaces; vibrant natural colors;
+detailed leaves and stems; realistic shadows and light interaction.
+Reference quality: Apple product photography + luxury food magazine +
+cinematic macro lens. The viewer should feel "I can almost touch the
+fruit."
+
+**Explicitly reject:** cartoon-looking fruit, perfectly plastic surfaces,
+generic stock supermarket photos, flat product grids.
+
+**Technique reference:** macro lens feeling, shallow depth of field,
+cinematic focus transitions, ultra-realistic textures, high-resolution
+detail.
+
+**Scroll behavior (this part IS built):** the camera moves closer into
+the produce as the visitor scrolls — first the full composition, then
+individual fruits, then extreme close-up textures. Implemented as a
+3-stage (or more) crossfade-and-zoom: each `HeroRevealStage.media`
+occupies an equal scroll segment, crossfades into the next with a 20%
+overlap, and each stage starts more zoomed-in than the previous one
+ended (`scale: 1 + index * 0.22` per stage) — so the "moving closer"
+sensation continues across stage boundaries, not just within one image.
+
+**What to do when real assets exist:** populate `HeroContent.revealStages`
+(`content/homepage.ts`) with 2 or more `{ media, label? }` entries — the
+first entry should be the full arranged-composition shot, the last the
+extreme macro-detail shot, any in between are individual-product shots.
+The moment 2+ entries exist, `HeroSection` automatically switches from
+`heroObject`'s single continuous zoom to this staged reveal — no other
+code change required.
+
+**Verification performed:** `tsc --noEmit`, `eslint`, `next build` clean.
+Browser-verified that the existing single-`heroObject` path (today's real
+rendering case, since `revealStages` is unpopulated) is pixel-identical
+to before this change — the new staged-reveal code path is real,
+type-checked, and rules-of-hooks-compliant (each stage is its own
+component instance, not a hook called in a loop) but structurally cannot
+be exercised until real staged content exists to populate it.
+
+---
+
+## 2026-08-02 — Hero scene: real isolated assets required, not crops from one flattened photo
+
+**Decision:** `HeroContent.scene`/`HeroSceneObject` (`content/types.ts`) — a
+"product reveal" of 12 independently-positioned, independently-animated
+produce objects (red pepper, yellow pepper, apple, broccoli, carrot,
+orange slice, lime, strawberry, raspberry, onion, leafy greens,
+pineapple), each with its own depth/parallax/rotation — was implemented
+against `HeroSceneObject.cropRegion`: every object cropped its own pixel
+rectangle out of the *same* single flattened composition photo
+(`hero.composition`), scaled and offset inside an `overflow-hidden`
+container to simulate 12 separate assets from one real photo. This
+`cropRegion` mechanism is now removed entirely. `HeroSceneObject.media`
+must be that item's own dedicated, already-isolated cutout — a
+transparent PNG/WebP with clean edges and its real shadow already baked
+in — with no shared-source-crop escape hatch. Until real per-item cutouts
+exist, `scene` is not populated at all; `content/homepage.ts`'s hero
+reverts to a single `revealStages: [{ media: hero.composition }]` entry,
+which renders that one real photo with a continuous scroll-driven camera
+push (scale 1 → 1.55, blur fading in near the end) — the same,
+previously-verified white/minimal single-image hero from the "Wire real
+hero image" phase, not the scene experiment.
+
+**Why:** The source photo has no alpha channel, so every crop still
+carried its own opaque background; wherever two objects' rendered
+positions overlapped, the crop showed a hard rectangle. The first fix
+attempt — CSS `mask-image: radial-gradient(...)` feathering each crop's
+edge to transparent — measurably removed the hard edges in isolation, but
+the user's review of the actual rendered result rejected it outright:
+"the produce objects now look like blurred cutouts... the feathered
+masks create a glowing/soft halo effect around each object. This does
+not match the Apple-style product reveal direction," with an explicit
+instruction not to keep refining the crop/mask approach further but to
+change the underlying asset strategy. A feathered crop is still,
+fundamentally, one flat photo's rectangle wearing a soft edge — no amount
+of mask-radius tuning turns it into an object with its own real depth,
+texture, and shadow, which is what an "Apple product page: real objects,
+real depth, camera movement" direction actually requires. Faking 12
+independent layers out of one photo was judged worse than being honest
+that only one real photo exists today.
+
+**What was explicitly rejected as a path forward:** continuing to adjust
+`cropRegion` rectangles, mask radii, or feather percentages to reduce the
+halo effect further. **What's required instead, before `scene` is
+populated again:** a real photo shoot or generated asset per produce
+item, delivered as its own transparent-background file with a real baked
+-in shadow — not a derivative of `hero.composition`.
+
+**Architecture preserved, not rebuilt:** `HeroSceneContent`/
+`HeroSceneObject`'s `position`/`size`/`depth`/`rotation` fields and
+`HeroScene`/`HeroSceneObjectLayer`'s parallax/depth/entrance-stagger
+animation logic (`components/homepage/hero-scene.tsx`) are unchanged —
+this was already correct per the user's own review ("The architecture is
+correct: independent objects, depth values, parallax, scroll movement.
+Only replace the image source strategy"). The only removals are
+`CropRegion`, `HeroSceneObject.cropRegion`, and the crop-offset/mask CSS
+in `HeroSceneObjectLayer`. The moment real per-item cutouts exist, populating
+`scene.objects` with `{ id, media: <real cutout>, position, size, depth,
+rotation }` (no `cropRegion` field to set) activates the scene exactly as
+designed, with zero component changes — `HeroSection`'s existing
+priority-fallback logic (`scene` → `revealStages` → `heroObject`) already
+handles the transition.
+
+**Trade-off:** The hero temporarily loses the "many independent floating
+objects" visual entirely, reverting to one photo with camera-push motion,
+until real per-item photography/cutouts are sourced — accepted, since the
+user explicitly ranked "premium visual quality over forcing fake layers"
+above having the scene effect at all.
+
+---
+
+## 2026-08-02 — Hero becomes full-bleed/full-viewport; new immersive produce photo; text moves onto the image
+
+**Decision:** The hero's layout changed from a two-column split (headline
+column + a boxed, contained product photo in its own column) to a single
+full-viewport visual: the produce photography is now an `absolute
+inset-0` layer behind the entire hero section (`object-cover`, not
+`object-contain`), and the headline/subhead/CTAs render on top of it in
+their own stacking layer, no longer in a separate grid column. A new
+source photo (`public/images/hero/produce-immersive.png`, replacing the
+`hero.composition` registry entry's `src`) replaces the previous
+composition — a tighter 1536×1024 crop where produce deliberately bleeds
+off all four edges, chosen specifically so a full-bleed treatment has no
+awkward hard edges to reveal. Legibility over the now-busy, edge-to-edge
+photography is handled by a soft CSS gradient scrim
+(`from-background via-background/85 to-transparent`, vertical on narrow
+screens/horizontal from `lg` up) — deliberately a fade to the page's own
+off-white background color, never a dark scrim, consistent with every
+prior hero decision's "white studio, not a dimmed banner" direction. The
+scroll-driven "camera push" gained a second, independent transform (a
+small upward `y` drift alongside the existing scale/blur) to read as
+movement through the scene rather than a photo simply growing in place.
+
+**Why:** The previous two-column layout was explicitly reviewed as
+reading like "a normal ecommerce banner: text on the left + photo on the
+right" rather than a product-reveal experience — structurally, a boxed
+image next to text is a banner regardless of how good the photo is.
+Apple product pages don't contain the product in a column; the product
+*is* the page. Moving the photography to a full-bleed background layer
+and letting text sit on top of it (rather than beside it) is what
+actually changes the category of the layout, not just its content.
+
+**Architecture preserved, not rebuilt:** `HeroContent`'s `scene`/
+`revealStages`/`heroObject` priority fallback, `MediaAsset`, and
+`HeroScene`'s independent-object/depth/parallax model are all unchanged
+— `HeroScene` and `HeroRevealStageLayer` were updated only to also render
+full-bleed (`object-cover`/`sizes="100vw"` instead of a boxed
+`object-contain`), not restructured. A future 2+-stage `revealStages`
+macro-photography sequence or a real-cutout `scene` both activate exactly
+as before, just now inside a full-viewport frame instead of a contained
+box.
+
+**Known gap, not addressed in this pass:** The user's brief for this
+iteration also asked for the real Morel logo to replace the header's
+code-drawn placeholder `Logo` component, but no logo file was attached to
+this request (only the produce photo was) — consistent with every earlier
+request for a real logo in this sprint, no such file has been provided
+yet. The placeholder remains in place rather than approximating a logo
+design from a flattened, non-transparent reference mockup screenshot seen
+earlier in this sprint (the same "don't fake an asset from a screenshot"
+reasoning as the hero-scene crop/mask decision above applies equally to a
+logo cropped out of a mockup).

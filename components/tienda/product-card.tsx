@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Minus, Plus, ShoppingCart, Star } from "lucide-react";
-import { motion } from "framer-motion";
+import { Minus, Plus, ShoppingCart } from "lucide-react";
 import { type Product } from "@/data/catalog";
 import { useCartStore } from "@/lib/cart-store";
 import { Button } from "@/components/ui/button";
-import { cn, formatCurrency, formatQuantity } from "@/lib/utils";
+import { formatCurrency, formatQuantity } from "@/lib/utils";
 import { trackEvent } from "@/lib/analytics-client";
 
 export function ProductCard({ product }: { product: Product }) {
@@ -41,27 +40,23 @@ export function ProductCard({ product }: { product: Product }) {
   }, [product.id, product.category]);
 
   return (
-    <motion.div
-      ref={cardRef}
-      whileHover={{ y: -4 }}
-      transition={{ type: "spring", stiffness: 300, damping: 22 }}
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-soft transition-shadow hover:shadow-soft-lg"
-    >
-      {product.popular && (
-        <div className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-full bg-brand-orange px-2 py-0.5 text-[10px] font-semibold text-white shadow-soft">
-          <Star className="h-2.5 w-2.5 fill-current" />
-          Popular
-        </div>
-      )}
-      <div
-        className={cn(
-          "flex h-28 items-center justify-center bg-gradient-to-br text-5xl",
-          product.gradient
+    <div ref={cardRef} className="group relative flex flex-col">
+      {/* Image area — product-first: a large, plain, flat surface (no
+          per-product gradient — that read as generic marketplace
+          decoration, not premium photography) with only a subtle scale on
+          hover, the same restrained technique the category tiles use. */}
+      <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-2xl bg-secondary/40">
+        {product.popular && (
+          <span className="absolute left-3 top-3 z-10 text-[10px] font-semibold uppercase tracking-wide text-brand-green">
+            Popular
+          </span>
         )}
-      >
-        <span className="drop-shadow-sm">{product.emoji}</span>
+        <span className="text-6xl transition-transform duration-500 ease-out group-hover:scale-110">
+          {product.emoji}
+        </span>
       </div>
-      <div className="flex flex-1 flex-col gap-2 p-4">
+
+      <div className="flex flex-1 flex-col gap-1 pt-4">
         <div>
           {product.brand && (
             <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -72,26 +67,31 @@ export function ProductCard({ product }: { product: Product }) {
             {product.name}
           </h3>
         </div>
-        <p className="text-xs text-muted-foreground line-clamp-2">{product.description}</p>
-        <div className="mt-auto flex items-center justify-between pt-2">
-          <div>
-            <p className="text-base font-semibold text-foreground">
-              {formatCurrency(product.price)}
-            </p>
-            <p className="text-[11px] text-muted-foreground">por {product.unit}</p>
-          </div>
+        <p className="text-xs text-muted-foreground line-clamp-1">{product.description}</p>
+        {/* Price stacked above a full-width action, not side-by-side —
+            at 2-column mobile widths a "price + stepper" row had nothing
+            to clip it (this card has no bounding container anymore) and
+            spilled into the neighboring grid cell. Stacking is robust at
+            every column count instead of narrowly fitting one. */}
+        <div className="mt-3 flex flex-col gap-2">
+          <p className="text-base font-semibold text-foreground">
+            {formatCurrency(product.price)}
+            <span className="ml-1 text-xs font-normal text-muted-foreground">
+              /{product.unit}
+            </span>
+          </p>
 
           {!line ? (
             <Button
               size="sm"
               onClick={() => addItem(product)}
-              className="rounded-full bg-brand-navy text-white transition-transform active:scale-95 hover:bg-brand-navy-light"
+              className="w-full justify-center rounded-full bg-brand-green text-white transition-transform active:scale-95 hover:bg-brand-green-dark"
             >
               <ShoppingCart className="h-3.5 w-3.5" />
               Agregar
             </Button>
           ) : (
-            <div className="flex items-center gap-1 rounded-full border border-border bg-secondary/60 p-0.5">
+            <div className="flex w-full items-center justify-between rounded-full bg-secondary/60 p-0.5">
               <button
                 className="flex h-7 w-7 items-center justify-center rounded-full text-foreground transition-transform hover:bg-background active:scale-90"
                 onClick={() =>
@@ -101,7 +101,7 @@ export function ProductCard({ product }: { product: Product }) {
               >
                 <Minus className="h-3.5 w-3.5" />
               </button>
-              <span className="min-w-[3rem] text-center text-xs font-semibold tabular-nums">
+              <span className="text-center text-xs font-semibold tabular-nums">
                 {formatQuantity(line.quantity, product.unit)}
               </span>
               <button
@@ -117,6 +117,6 @@ export function ProductCard({ product }: { product: Product }) {
           )}
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 }

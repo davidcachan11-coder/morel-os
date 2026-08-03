@@ -1,0 +1,14 @@
+<svg width="1200" height="900" viewBox="0 0 1200 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="catbg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#eef7ef"/>
+      <stop offset="100%" stop-color="#dcefe0"/>
+    </linearGradient>
+    <radialGradient id="catglow" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#4fb672" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#4fb672" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="900" fill="url(#catbg)"/>
+  <circle cx="600" cy="380" r="380" fill="url(#catglow)"/>
+</svg>

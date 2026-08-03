@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { SiteHeader } from "@/components/site-header";
 import { CartDrawer } from "@/components/cart-drawer";
 import { PageViewTracker } from "@/components/analytics/page-view-tracker";
+import { getNavContent } from "@/content/provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,11 +24,13 @@ export const metadata: Metadata = {
     "Pedidos online, seguimiento en vivo y operaciones inteligentes para Supermercados Morel.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const navContent = await getNavContent();
+
   return (
     <html
       lang="es-AR"
@@ -36,7 +39,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col bg-background">
         <TooltipProvider delayDuration={150}>
           <PageViewTracker />
-          <SiteHeader />
+          <SiteHeader navContent={navContent} />
           {children}
           <CartDrawer />
           <Toaster position="top-right" richColors closeButton />

@@ -11,6 +11,7 @@ import {
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
+import type { MediaAsset } from "@/types/media";
 
 // ---------------------------------------------------------------------------
 // Categories
@@ -68,6 +69,13 @@ export interface Product {
   popular?: boolean;
   discountPct?: number;
   substitutable: boolean; // whether this product commonly gets substituted when out of stock
+  // Sprint 7 (Premium Storefront Redesign) — additive, optional. Every
+  // product below leaves this undefined for now (zero visual change,
+  // emoji/gradient rendering continues exactly as today); product pages
+  // (a later Sprint 7 phase) are what actually populates and renders
+  // this per product, once real AI-generated or photographed imagery
+  // exists to assign.
+  image?: MediaAsset;
 }
 
 export const products: Product[] = [
